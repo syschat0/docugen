@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM Document Agent</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍩</text></svg>"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Jua&family=Luckiest+Guy&family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap"
+    />
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script>
+      document.documentElement.dataset.theme =
+        localStorage.getItem("docugenTheme") || "simpsons";
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1 data-i18n="appTitle">LLM Document Agent</h1>
+          <p id="healthText" data-i18n="checkingApi">Checking API status</p>
+        </div>
+        <div class="topbar-actions">
+          <label class="language-picker">
+            <span data-i18n="theme">Theme</span>
+            <select id="themeSelect" aria-label="Theme">
+              <option value="simpsons" data-i18n="themeSimpsons">Simpsons</option>
+              <option value="pastel" data-i18n="themePastel">Pastel Watercolor</option>
+            </select>
+          </label>
+          <label class="language-picker">
+            <span data-i18n="language">Language</span>
+            <select id="languageSelect" aria-label="Language">
+              <option value="en">English</option>
+              <option value="ko">한국어</option>
+            </select>
+          </label>
+          <button id="refreshButton" type="button" class="secondary" data-i18n="refresh">Refresh</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar" aria-label="Projects">
+          <div class="sidebar-head">
+            <div>
+              <h2 data-i18n="projects">Projects</h2>
+              <span id="projectCount">0 projects</span>
+            </div>
+            <button id="newProjectToggle" type="button" data-i18n="new">New</button>
+          </div>
+
+          <form id="projectForm" class="form-stack collapsed-card hidden">
+            <label>
+              <span data-i18n="title">Title</span>
+              <input id="projectTitle" name="title" required maxlength="200" />
+            </label>
+            <label>
+              <span data-i18n="initialRequest">Initial request</span>
+              <textarea id="projectRequest" name="initial_request" required rows="4"></textarea>
+            </label>
+            <button type="submit" data-i18n="createProject">Create Project</button>
+          </form>
+
+          <div id="projectList" class="project-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="main-pane" aria-label="Writing workspace">
+          <div id="emptyState" class="empty-state">
+            <h2 data-i18n="emptyTitle">Select or create a project</h2>
+            <p data-i18n="emptyBody">Choose a project from the sidebar, or create a new one to start the writing pipeline.</p>
+          </div>
+
+          <div id="projectDetail" class="hidden">
+            <section class="hero-panel" aria-label="Current project">
+              <div class="hero-copy">
+                <p class="eyebrow" data-i18n="currentProject">Current Project</p>
+                <h2 id="detailTitle"></h2>
+                <p id="detailMeta"></p>
+              </div>
+              <div class="hero-actions">
+                <span id="detailStatus" class="status-pill"></span>
+                <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
+                <button id="deleteProjectButton" type="button" class="danger" data-i18n="delete">Delete</button>
+              </div>
+            </section>
+
+            <section id="nextAction" class="next-action" aria-live="polite">
+              <div>
+                <p class="eyebrow" data-i18n="nextAction">Next Action</p>
+                <h3 id="nextActionTitle" data-i18n="ready">Ready</h3>
+                <p id="nextActionBody" data-i18n="readyBody">Start the writing pipeline when you are ready.</p>
+                <div id="nextActionItems" class="next-action-items hidden"></div>
+              </div>
+            </section>
+
+            <section class="progress-panel" aria-label="Writing progress">
+              <div class="section-head">
+                <h3 data-i18n="pipeline">Pipeline</h3>
+                <span id="progressPercent">0%</span>
+              </div>
+              <div class="progress-track">
+                <div id="progressFill" class="progress-fill"></div>
+              </div>
+              <div id="progressSteps" class="progress-steps" aria-live="polite"></div>
+            </section>
+
+            <section class="draft-panel" aria-label="Draft preview">
+              <div class="section-head">
+                <h3 data-i18n="draftPreview">Draft Preview</h3>
+                <div class="inline-controls">
+                  <span id="draftStatus" data-i18n="noDraft">No draft</span>
+                  <button id="draftViewToggle" type="button" class="secondary" data-i18n="raw">Raw</button>
+                  <button id="exportButton" type="button" class="secondary" data-i18n="export">Export</button>
+                </div>
+              </div>
+              <div id="draftViewer" class="draft-viewer">
+                <aside id="draftToc" class="draft-toc hidden" aria-label="Draft table of contents"></aside>
+                <div id="draftPreview" class="draft-preview markdown-body" data-i18n="draftEmpty">Run the pipeline to generate a draft.</div>
+              </div>
+            </section>
+
+            <section class="tabs-panel" aria-label="Project details">
+              <div class="tabs" role="tablist" aria-label="Project detail tabs">
+                <button id="questionsTab" class="tab-button active" type="button" data-tab="questions" role="tab" data-i18n="questions">Questions</button>
+                <button id="artifactsTab" class="tab-button" type="button" data-tab="artifacts" role="tab" data-i18n="artifacts">Artifacts</button>
+                <button id="pipelineTab" class="tab-button" type="button" data-tab="pipeline" role="tab" data-i18n="pipeline">Pipeline</button>
+              </div>
+
+              <div id="questionsPane" class="tab-pane" role="tabpanel">
+                <div class="section-head">
+                  <h3 data-i18n="questions">Questions</h3>
+                  <div class="inline-controls">
+                    <select id="questionFilter" aria-label="Question status filter">
+                      <option value="" data-i18n="all">All</option>
+                      <option value="pending" data-i18n="pending">Pending</option>
+                      <option value="answered" data-i18n="answered">Answered</option>
+                    </select>
+                    <button id="addQuestionToggle" type="button" class="secondary" data-i18n="add">Add</button>
+                  </div>
+                </div>
+
+                <form id="questionForm" class="form-stack compact hidden">
+                  <label>
+                    <span data-i18n="phase">Phase</span>
+                    <input id="questionPhase" required value="intake" />
+                  </label>
+                  <label>
+                    <span data-i18n="question">Question</span>
+                    <textarea id="questionText" required rows="3"></textarea>
+                  </label>
+                  <button type="submit" data-i18n="addQuestion">Add Question</button>
+                </form>
+
+                <div id="questionList" class="list" aria-live="polite"></div>
+              </div>
+
+              <div id="artifactsPane" class="tab-pane hidden" role="tabpanel">
+                <div class="section-head">
+                  <h3 data-i18n="artifacts">Artifacts</h3>
+                  <div class="inline-controls">
+                    <span id="artifactCount">0</span>
+                    <button id="addArtifactToggle" type="button" class="secondary" data-i18n="add">Add</button>
+                  </div>
+                </div>
+
+                <form id="artifactForm" class="form-stack compact hidden">
+                  <label>
+                    <span data-i18n="type">Type</span>
+                    <input id="artifactType" required value="brief" />
+                  </label>
+                  <label>
+                    <span data-i18n="title">Title</span>
+                    <input id="artifactTitle" maxlength="200" />
+                  </label>
+                  <label>
+                    <span data-i18n="jsonContent">JSON content</span>
+                    <textarea id="artifactContent" rows="5">{}</textarea>
+                  </label>
+                  <button type="submit" data-i18n="saveArtifact">Save Artifact</button>
+                </form>
+
+                <div id="artifactList" class="list" aria-live="polite"></div>
+              </div>
+
+              <div id="pipelinePane" class="tab-pane hidden" role="tabpanel">
+                <div class="section-head">
+                  <h3 data-i18n="pipelineDetails">Pipeline Details</h3>
+                  <span id="pipelineStatus" data-i18n="idle">Idle</span>
+                </div>
+                <div id="pipelineList" class="list" aria-live="polite"></div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script src="/ui/app.js"></script>
+  </body>
+</html>
