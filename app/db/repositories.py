@@ -13,9 +13,11 @@ from app.schemas.questions import (
     PendingQuestionCreate,
     PendingQuestionRead,
     QuestionAnswerCreate,
+    SectionFeedbackRead,
     UserDecisionRead,
 )
 from app.schemas.workflow import WorkflowProgressRead, WorkflowRunRead, WorkflowStepRead
+from app.services.citations import format_sources_section, renumber_citations
 from app.services.llm import (
     LLMError,
     apply_section_revisions,
@@ -24,16 +26,24 @@ from app.services.llm import (
     generate_brief,
     generate_outline,
     generate_section_plan,
+    best_overlap_score,
     merge_sections,
     plan_user_questions,
     review_continuity,
     review_outline,
     review_section_plan,
+    revise_section_with_feedback,
     revise_targeted_sections,
     select_relevant_sources,
     write_section_with_summary,
 )
-from app.services.search import research_chapters, search_web, summarize_search_sources
+from app.services.search import (
+    build_section_query,
+    research_chapters,
+    search_section_sources,
+    search_web,
+    summarize_search_sources,
+)
 
 
 class QuestionAlreadyAnsweredError(Exception):
@@ -56,6 +66,7 @@ WORKFLOW_STEPS: list[tuple[str, str]] = [
     ("chapter_research", "Chapter research"),
     ("section_writing", "Section writing"),
     ("section_summary", "Section summaries"),
+    ("feedback_revision", "Feedback revision"),
     ("continuity_review", "Continuity review"),
     ("targeted_revision", "Targeted revision"),
     ("final_merge", "Final merge"),
@@ -470,6 +481,93 @@ def list_user_decisions(project_id: str) -> List[UserDecisionRead]:
     return decisions
 
 
+class UnknownSectionError(Exception):
+    pass
+
+
+def add_section_feedback(
+    project_id: str, section_id: str, comment: str
+) -> Optional[UserDecisionRead]:
+    """Store a per-section improvement comment as a section_feedback decision.
+
+    These decisions are excluded from the global input cutoff, so they only
+    trigger a rewrite of their target section on the next run instead of
+    regenerating the whole document.
+    """
+    if get_project(project_id) is None:
+        return None
+
+    known_ids = {
+        str(((draft.content or {}).get("section") or {}).get("id", ""))
+        for draft in _latest_artifacts(project_id, "section_draft")
+    }
+    if section_id not in known_ids:
+        raise UnknownSectionError(
+            f"No section draft found for section id: {section_id}"
+        )
+
+    decision_id = str(uuid4())
+    now = utc_now_iso()
+    question = f"Improve section {section_id}"
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_decisions (
+                id, project_id, phase, question_id, question, answer, applies_to_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                decision_id,
+                project_id,
+                "section_feedback",
+                None,
+                question,
+                comment,
+                json.dumps({"section_id": section_id}, ensure_ascii=False),
+                now,
+            ),
+        )
+    return UserDecisionRead(
+        id=decision_id,
+        project_id=project_id,
+        phase="section_feedback",
+        question_id=None,
+        question=question,
+        answer=comment,
+        applies_to={"section_id": section_id},
+        created_at=now,
+    )
+
+
+def list_section_feedback(
+    project_id: str, section_id: str
+) -> Optional[list[SectionFeedbackRead]]:
+    """All feedback for one section, oldest first, with its applied state.
+
+    A comment counts as applied once the section's latest draft is newer than
+    the comment (the same rule the feedback_revision stage uses).
+    """
+    if get_project(project_id) is None:
+        return None
+
+    draft_time = ""
+    for draft in _latest_artifacts(project_id, "section_draft"):
+        section = (draft.content or {}).get("section") or {}
+        if str(section.get("id", "")) == str(section_id):
+            draft_time = draft.updated_at
+
+    return [
+        SectionFeedbackRead(
+            **decision.model_dump(),
+            applied=bool(draft_time and decision.created_at <= draft_time),
+        )
+        for decision in list_user_decisions(project_id)
+        if decision.phase == "section_feedback"
+        and str((decision.applies_to or {}).get("section_id", "")) == str(section_id)
+    ]
+
+
 def create_artifact(project_id: str, payload: ArtifactCreate) -> ArtifactRead:
     now = utc_now_iso()
     artifact_id = str(uuid4())
@@ -824,6 +922,10 @@ def _latest_artifact(project_id: str, artifact_type: str) -> Optional[ArtifactRe
     return _artifact_from_row(row)
 
 
+def get_latest_artifact(project_id: str, artifact_type: str) -> Optional[ArtifactRead]:
+    return _latest_artifact(project_id, artifact_type)
+
+
 def export_project_markdown(project_id: str) -> Optional[ExportRead]:
     draft = _latest_artifact(project_id, "draft")
     if draft is None or not draft.content:
@@ -1003,11 +1105,49 @@ def _reusable_section_drafts(
             {
                 "section": content.get("section") or section,
                 "markdown": markdown,
+                "sources": content.get("sources") or [],
                 "artifact_id": draft.id,
                 "updated_at": draft.updated_at,
             }
         )
     return reusable
+
+
+def _section_feedback_comments(
+    feedback_decisions: list[UserDecisionRead], section_id: str
+) -> list[str]:
+    return [
+        decision.answer
+        for decision in sorted(feedback_decisions, key=lambda item: item.created_at)
+        if str((decision.applies_to or {}).get("section_id", "")) == str(section_id)
+    ]
+
+
+def _pending_section_feedback(
+    feedback_decisions: list[UserDecisionRead],
+    section_drafts: list[Dict[str, Any]],
+) -> Dict[str, list[UserDecisionRead]]:
+    """Group feedback newer than the current draft of its target section.
+
+    A feedback decision counts as applied once its section draft was written
+    after the feedback arrived (fresh writes receive the comments in their
+    prompt; feedback rewrites store a newer draft artifact), so timestamps are
+    the only state needed.
+    """
+    draft_times = {
+        str((draft.get("section") or {}).get("id", "")): str(draft.get("updated_at") or "")
+        for draft in section_drafts
+    }
+    pending: Dict[str, list[UserDecisionRead]] = {}
+    for decision in feedback_decisions:
+        section_id = str((decision.applies_to or {}).get("section_id", ""))
+        draft_time = draft_times.get(section_id)
+        if draft_time is None or decision.created_at <= draft_time:
+            continue
+        pending.setdefault(section_id, []).append(decision)
+    for items in pending.values():
+        items.sort(key=lambda decision: decision.created_at)
+    return pending
 
 
 def _reusable_section_summaries(
@@ -1275,13 +1415,17 @@ def _local_section_draft(
     project: ProjectRead,
     section: Dict[str, Any],
     previous_summary: Dict[str, Any] | None,
-    research: Dict[str, Any] | None,
+    sources: list[Dict[str, Any]],
+    feedback: list[str] | None = None,
 ) -> str:
     handoff = previous_summary.get("next_section_handoff") if previous_summary else ""
     source = ""
-    results = research.get("results", []) if research else []
-    if results:
-        source = f"\n\nReference note: see [{1}] {results[0].get('title', 'source')}."
+    if sources:
+        source = f"\n\nReference note: see [{1}] {sources[0].get('title', 'source')}."
+    feedback_note = ""
+    if feedback:
+        feedback_lines = "\n".join(f"- {comment}" for comment in feedback)
+        feedback_note = f"\n\nUser feedback applied:\n{feedback_lines}"
     depth = min(max(_int_or_default(section.get("depth"), 2), 2), 6)
     heading = "#" * depth
     path = _section_path_text(section)
@@ -1293,6 +1437,7 @@ def _local_section_draft(
         f"Key points: {', '.join(section.get('key_points', []))}.\n\n"
         + (f"Context from the previous section: {handoff}\n" if handoff else "")
         + source
+        + feedback_note
     )
 
 
@@ -1312,6 +1457,7 @@ def _local_merge(
     section_drafts: list[Dict[str, Any]],
     research: Dict[str, Any] | None,
     section_plan: Dict[str, Any] | None = None,
+    used_sources: list[Dict[str, Any]] | None = None,
 ) -> str:
     draft_by_id = {
         str((item.get("section") or {}).get("id", "")): _ensure_markdown_heading_number(
@@ -1344,12 +1490,11 @@ def _local_merge(
     else:
         body = "\n\n".join(draft_by_id.values())
 
-    sources = research.get("results", []) if research else []
-    source_lines = "\n".join(
-        f"{index}. [{source.get('title', 'Source')}]({source.get('url', '')})"
-        for index, source in enumerate(sources, start=1)
-    )
-    sources_section = f"\n\n## Sources\n\n{source_lines}\n" if source_lines else ""
+    # Number the source list from the sources actually cited inline so [n]
+    # markers and the "Sources" entries always agree; fall back to the raw
+    # research results only when nothing was cited.
+    sources = used_sources or (research.get("results", []) if research else [])
+    sources_section = format_sources_section(sources)
     return f"# {project.title}\n\n{body}{sources_section}"
 
 
@@ -1484,11 +1629,17 @@ def run_document_generation(
 
     agent_name = "llm_pipeline_writer" if settings.llm_enabled else "local_pipeline_writer"
     # Outline-approval answers are process control, not document content:
-    # they must not feed prompts or invalidate cached artifacts.
+    # they must not feed prompts or invalidate cached artifacts. Section
+    # feedback is applied per-section in the feedback_revision stage, so it
+    # must not invalidate the whole pipeline either.
+    all_decisions = list_user_decisions(project_id)
     decisions = [
         decision
-        for decision in list_user_decisions(project_id)
-        if decision.phase != "outline_approval"
+        for decision in all_decisions
+        if decision.phase not in {"outline_approval", "section_feedback"}
+    ]
+    feedback_decisions = [
+        decision for decision in all_decisions if decision.phase == "section_feedback"
     ]
     input_cutoff = _decision_cutoff(project, decisions)
     artifact_ids: list[str] = []
@@ -2118,25 +2269,56 @@ def run_document_generation(
                 f"{item.get('id', '')} {item.get('title', '')}".strip()
                 for item in sections
             ]
+            topup_info: list[Dict[str, Any]] = []
             for section in sections:
+                section_sources = _sources_for_section(section, chapter_sources, research)
+                # Top-up search: when nothing in the research pool matches this
+                # section, one extra targeted search beats writing sourceless.
+                if (
+                    settings.section_search_enabled
+                    and settings.search_enabled
+                    and len(topup_info) < settings.section_search_topup_limit
+                    and best_overlap_score(section, section_sources) == 0
+                ):
+                    extra_sources, topup_error = search_section_sources(
+                        section, settings.chapter_search_results
+                    )
+                    topup_info.append(
+                        {
+                            "section_id": str(section.get("id", "")),
+                            "query": build_section_query(section),
+                            "source_count": len(extra_sources),
+                            "error": topup_error,
+                        }
+                    )
+                    if extra_sources:
+                        section_sources = extra_sources
+                section_feedback = _section_feedback_comments(
+                    feedback_decisions, str(section.get("id", ""))
+                )
                 if settings.llm_enabled:
                     markdown, summary, usage = write_section_with_summary(
                         project,
                         brief,
                         section,
                         previous_summary,
-                        _sources_for_section(section, chapter_sources, research),
+                        section_sources,
                         all_section_titles,
+                        feedback=section_feedback,
                     )
                 else:
                     markdown, usage = _local_section_draft(
-                        project, section, previous_summary, research
+                        project, section, previous_summary, section_sources, section_feedback
                     ), None
                     summary = _local_section_summary(section, markdown)
                 if usage is not None:
                     writing_usage.append(usage)
                 markdown = _ensure_markdown_heading_number(markdown, section)
-                draft_content = {"section": section, "markdown": markdown}
+                draft_content = {
+                    "section": section,
+                    "markdown": markdown,
+                    "sources": section_sources,
+                }
                 with get_connection() as conn:
                     artifact_ids.append(
                         _insert_artifact(
@@ -2164,6 +2346,7 @@ def run_document_generation(
                     {
                         "section": section,
                         "markdown": markdown,
+                        "sources": section_sources,
                         "artifact_id": artifact_ids[-1],
                         "updated_at": draft_artifact.updated_at if draft_artifact else utc_now_iso(),
                     }
@@ -2176,6 +2359,7 @@ def run_document_generation(
                     "section_artifact_ids": artifact_ids[-len(section_drafts) :],
                     "summary_ids": summary_ids,
                     "summary_mode": "combined_with_writing",
+                    **({"topup_searches": topup_info} if topup_info else {}),
                 },
                 token_usage={"section_calls": writing_usage} if writing_usage else None,
             )
@@ -2197,6 +2381,86 @@ def run_document_generation(
             section_work_time = max(
                 [draft["updated_at"] for draft in section_drafts if draft.get("updated_at")]
                 or [utc_now_iso()]
+            )
+
+        # Apply per-section user feedback that arrived after the current draft
+        # of its target section. Fresh writes above already receive feedback in
+        # their prompt, so only reused drafts show up here.
+        pending_feedback = _pending_section_feedback(feedback_decisions, section_drafts)
+        if not pending_feedback:
+            _complete_reuse_run(
+                project_id,
+                agent_name,
+                "feedback_revision",
+                {"applied_sections": [], "comment_count": 0},
+            )
+        else:
+            run_id = _start_agent_run(
+                project_id,
+                agent_name,
+                "feedback_revision",
+                {
+                    "section_ids": sorted(pending_feedback),
+                    "comment_count": sum(len(items) for items in pending_feedback.values()),
+                },
+            )
+            feedback_usage: list[Dict[str, Any]] = []
+            applied_sections: list[str] = []
+            for draft in section_drafts:
+                section = draft.get("section") or {}
+                section_id = str(section.get("id", ""))
+                decisions_for_section = pending_feedback.get(section_id)
+                if not decisions_for_section:
+                    continue
+                comments = [decision.answer for decision in decisions_for_section]
+                if settings.llm_enabled:
+                    markdown, usage = revise_section_with_feedback(
+                        project, brief, draft, comments
+                    )
+                else:
+                    notes = "\n".join(f"- {comment}" for comment in comments)
+                    markdown, usage = (
+                        f"{draft.get('markdown', '')}\n\nUser feedback applied:\n{notes}",
+                        None,
+                    )
+                markdown = _ensure_markdown_heading_number(markdown, section)
+                draft_content = {
+                    "section": section,
+                    "markdown": markdown,
+                    "sources": draft.get("sources") or [],
+                }
+                with get_connection() as conn:
+                    artifact_ids.append(
+                        _insert_artifact(
+                            conn,
+                            project_id,
+                            "section_draft",
+                            f"Section {section_id}: feedback applied",
+                            draft_content,
+                            utc_now_iso(),
+                            agent_name,
+                        )
+                    )
+                revised_artifact = get_artifact(project_id, artifact_ids[-1])
+                draft["markdown"] = markdown
+                draft["artifact_id"] = artifact_ids[-1]
+                draft["updated_at"] = (
+                    revised_artifact.updated_at if revised_artifact else utc_now_iso()
+                )
+                applied_sections.append(section_id)
+                if usage is not None:
+                    feedback_usage.append({"section_id": section_id, **usage})
+            section_work_time = max(
+                [section_work_time]
+                + [draft["updated_at"] for draft in section_drafts if draft.get("updated_at")]
+            )
+            _complete_agent_run(
+                run_id,
+                {
+                    "applied_sections": applied_sections,
+                    "comment_count": sum(len(items) for items in pending_feedback.values()),
+                },
+                token_usage={"section_calls": feedback_usage} if feedback_usage else None,
             )
 
         continuity_artifact = _latest_artifact(project_id, "continuity_review")
@@ -2327,18 +2591,41 @@ def run_document_generation(
                     ),
                 },
             )
+            # Each section cites [1]/[2] against its own small source list, so
+            # remap those local markers onto one global numbering (and real
+            # links) before merging. Drafts revived from revision artifacts may
+            # lack the stored source list; recompute it the same way section
+            # writing did.
+            renumbered_drafts, used_sources = renumber_citations(
+                [
+                    {
+                        "section": draft["section"],
+                        "markdown": draft["markdown"],
+                        "sources": draft.get("sources")
+                        or _sources_for_section(
+                            draft.get("section") or {}, chapter_sources, research
+                        ),
+                    }
+                    for draft in section_drafts
+                ]
+            )
             merge_inputs = [
                 {"section": draft["section"], "markdown": draft["markdown"]}
-                for draft in section_drafts
+                for draft in renumbered_drafts
             ]
             if settings.llm_enabled and settings.llm_merge_enabled:
                 final_markdown, usage = merge_sections(
-                    project, brief, outline, merge_inputs, summaries, research
+                    project,
+                    brief,
+                    outline,
+                    merge_inputs,
+                    summaries,
+                    {"results": used_sources} if used_sources else research,
                 )
                 merge_mode = "llm"
             else:
                 final_markdown, usage = _local_merge(
-                    project, merge_inputs, research, section_plan
+                    project, merge_inputs, research, section_plan, used_sources
                 ), None
                 merge_mode = "local"
             final_content = {"format": "markdown", "markdown": final_markdown}

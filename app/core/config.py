@@ -33,6 +33,14 @@ class Settings:
     search_engine: str = os.getenv("SEARCH_ENGINE", "daum").strip().lower()
     search_max_results: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
     chapter_search_results: int = int(os.getenv("CHAPTER_SEARCH_RESULTS", "2"))
+    # Per-section top-up search: when a section's selected sources have no
+    # keyword overlap with the section, run one extra web search for it.
+    section_search_enabled: bool = _bool_env("SECTION_SEARCH_ENABLED", "false")
+    section_search_topup_limit: int = int(os.getenv("SECTION_SEARCH_TOPUP_LIMIT", "10"))
+    # Let the section writer emit mermaid diagram code blocks. Small models
+    # produce broken mermaid syntax often enough that this is opt-in; the UI
+    # falls back to a plain code block when a diagram fails to render.
+    diagrams_enabled: bool = _bool_env("DIAGRAMS_ENABLED", "false")
     search_timeout_seconds: int = int(os.getenv("SEARCH_TIMEOUT_SECONDS", "15"))
 
 

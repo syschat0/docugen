@@ -2,7 +2,7 @@
 setlocal
 set "PROJECT_ROOT=%~dp0.."
 set "VENV_PY=%PROJECT_ROOT%\.venv\Scripts\python.exe"
-set "HOST_NAME=127.0.0.1"
+set "HOST_NAME=0.0.0.0"
 set "PORT=8000"
 set "RELOAD=--reload"
 

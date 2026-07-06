@@ -4,18 +4,23 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.db.repositories import (
     QuestionAlreadyAnsweredError,
+    UnknownSectionError,
+    add_section_feedback,
     answer_pending_question,
     create_pending_question,
     delete_question_answer,
     get_pending_question,
     get_project,
     list_pending_questions,
+    list_section_feedback,
     update_question_answer,
 )
 from app.schemas.questions import (
     PendingQuestionCreate,
     PendingQuestionRead,
     QuestionAnswerCreate,
+    SectionFeedbackCreate,
+    SectionFeedbackRead,
     UserDecisionRead,
 )
 
@@ -76,6 +81,38 @@ def update_question_answer_endpoint(
     if decision is None:
         raise HTTPException(status_code=404, detail="Answered question not found")
     return decision
+
+
+@router.post(
+    "/sections/{section_id}/feedback",
+    response_model=UserDecisionRead,
+    status_code=201,
+)
+def add_section_feedback_endpoint(
+    project_id: str, section_id: str, payload: SectionFeedbackCreate
+) -> UserDecisionRead:
+    _ensure_project(project_id)
+    try:
+        decision = add_section_feedback(project_id, section_id, payload.comment)
+    except UnknownSectionError:
+        raise HTTPException(
+            status_code=404,
+            detail="No section draft exists for this section id yet",
+        )
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return decision
+
+
+@router.get(
+    "/sections/{section_id}/feedback",
+    response_model=List[SectionFeedbackRead],
+)
+def list_section_feedback_endpoint(
+    project_id: str, section_id: str
+) -> List[SectionFeedbackRead]:
+    _ensure_project(project_id)
+    return list_section_feedback(project_id, section_id) or []
 
 
 @router.delete("/questions/{question_id}/answer", status_code=204)

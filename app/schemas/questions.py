@@ -25,6 +25,10 @@ class QuestionAnswerCreate(BaseModel):
     applies_to: Dict[str, Any] | None = None
 
 
+class SectionFeedbackCreate(BaseModel):
+    comment: str = Field(min_length=1, max_length=2000)
+
+
 class UserDecisionRead(BaseModel):
     id: str
     project_id: str
@@ -34,3 +38,7 @@ class UserDecisionRead(BaseModel):
     answer: str
     applies_to: Dict[str, Any] | None
     created_at: str
+
+
+class SectionFeedbackRead(UserDecisionRead):
+    applied: bool = False

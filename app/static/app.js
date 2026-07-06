@@ -1,11 +1,11 @@
 const state = {
   projects: [],
-  selectedProjectId: null,
+  selectedProjectId: new URLSearchParams(window.location.search).get("project")?.trim() || null,
   progressTimer: null,
   activeTab: "questions",
   draftView: "rendered",
   language: localStorage.getItem("docugenLanguage") || "en",
-  theme: localStorage.getItem("docugenTheme") || "simpsons",
+  theme: localStorage.getItem("docugenTheme") || "pastel",
   questions: [],
   answerDrafts: {},
   artifacts: [],
@@ -23,6 +23,7 @@ const translations = {
     answerNotAvailable: "(answer not available)",
     answerSaved: "Answer saved.",
     answerUpdated: "Answer updated. Older artifacts will be regenerated on the next run.",
+    answersSaved: "Saved {count} answers.",
     appTitle: "LLM Document Agent",
     artifactSaved: "Artifact saved.",
     artifacts: "Artifacts",
@@ -50,6 +51,16 @@ const translations = {
     error: "Error",
     export: "Export",
     exportedTo: "Exported to {path}",
+    formView: "Form View",
+    feedbackApplied: "Applied",
+    feedbackPanelTitle: "Comments for section {id}",
+    feedbackPending: "Pending",
+    feedbackPlaceholder: "Write an improvement comment (multi-line supported)",
+    feedbackPrompt: "Improvement comment for section {id}:",
+    feedbackSaved: "Comment saved. It will be applied to section {id} on the next run.",
+    close: "Close",
+    noFeedback: "No comments yet.",
+    saveComment: "Save Comment",
     finalMerge: "Final merge",
     goal: "Goal",
     idle: "Idle",
@@ -59,6 +70,7 @@ const translations = {
     mode: "Mode",
     new: "New",
     nextAction: "Next Action",
+    noAnswersToSave: "Enter at least one answer first.",
     noArtifacts: "No artifacts.",
     noDraft: "No draft",
     noProjects: "No projects yet.",
@@ -89,6 +101,8 @@ const translations = {
     rerunFromHere: "Rerun from here",
     reviewDraft: "Review the draft",
     reviewDraftBody: "The staged pipeline completed. Review the draft preview or inspect intermediate artifacts.",
+    saveAllAnswers: "Save All Answers",
+    saveAnswersAndRun: "Save & Start Writing",
     saveArtifact: "Save Artifact",
     searchError: "Search error",
     sections: "Sections",
@@ -126,6 +140,7 @@ const translations = {
     answerNotAvailable: "(답변을 불러올 수 없음)",
     answerSaved: "답변을 저장했습니다.",
     answerUpdated: "답변을 수정했습니다. 다음 실행 시 이전 산출물이 다시 생성됩니다.",
+    answersSaved: "답변 {count}개를 저장했습니다.",
     appTitle: "LLM 문서 작성 에이전트",
     artifactSaved: "산출물을 저장했습니다.",
     artifacts: "산출물",
@@ -153,6 +168,16 @@ const translations = {
     error: "오류",
     export: "내보내기",
     exportedTo: "{path}로 내보냈습니다.",
+    formView: "양식 보기",
+    feedbackApplied: "반영됨",
+    feedbackPanelTitle: "섹션 {id} 코멘트",
+    feedbackPending: "대기 중",
+    feedbackPlaceholder: "개선 코멘트를 입력하세요 (여러 줄 가능)",
+    feedbackPrompt: "섹션 {id}에 대한 개선 코멘트를 입력하세요:",
+    feedbackSaved: "코멘트를 저장했습니다. 다음 실행 시 섹션 {id}에 반영됩니다.",
+    close: "닫기",
+    noFeedback: "아직 코멘트가 없습니다.",
+    saveComment: "코멘트 저장",
     finalMerge: "최종 병합",
     goal: "목표",
     idle: "대기",
@@ -162,6 +187,7 @@ const translations = {
     mode: "모드",
     new: "새로 만들기",
     nextAction: "다음 작업",
+    noAnswersToSave: "먼저 답변을 입력하세요.",
     noArtifacts: "산출물이 없습니다.",
     noDraft: "초안 없음",
     noProjects: "아직 프로젝트가 없습니다.",
@@ -192,6 +218,8 @@ const translations = {
     rerunFromHere: "여기서부터 재실행",
     reviewDraft: "초안 검토",
     reviewDraftBody: "단계별 파이프라인이 완료되었습니다. 초안 미리보기나 중간 산출물을 검토하세요.",
+    saveAllAnswers: "답변 모두 저장",
+    saveAnswersAndRun: "저장 후 작성 시작",
     saveArtifact: "산출물 저장",
     searchError: "검색 오류",
     sections: "섹션",
@@ -233,6 +261,7 @@ const phaseLabels = {
     chapter_research: "Chapter research",
     section_writing: "Section writing",
     section_summary: "Section summaries",
+    feedback_revision: "Feedback revision",
     continuity_review: "Continuity review",
     targeted_revision: "Targeted revision",
     final_merge: "Final merge",
@@ -249,6 +278,7 @@ const phaseLabels = {
     chapter_research: "챕터 자료 조사",
     section_writing: "섹션 작성",
     section_summary: "섹션 요약",
+    feedback_revision: "피드백 반영",
     continuity_review: "흐름 검토",
     targeted_revision: "부분 수정",
     final_merge: "최종 병합",
@@ -281,8 +311,10 @@ const els = {
   progressFill: document.querySelector("#progressFill"),
   progressSteps: document.querySelector("#progressSteps"),
   draftStatus: document.querySelector("#draftStatus"),
+  draftViewer: document.querySelector("#draftViewer"),
   draftToc: document.querySelector("#draftToc"),
   draftPreview: document.querySelector("#draftPreview"),
+  formViewButton: document.querySelector("#formViewButton"),
   draftViewToggle: document.querySelector("#draftViewToggle"),
   exportButton: document.querySelector("#exportButton"),
   questionForm: document.querySelector("#questionForm"),
@@ -310,6 +342,34 @@ function applyTheme() {
   if (els.themeSelect) {
     els.themeSelect.value = state.theme;
   }
+}
+
+function projectIdFromUrl() {
+  return new URLSearchParams(window.location.search).get("project")?.trim() || null;
+}
+
+function syncProjectInUrl(projectId) {
+  const url = new URL(window.location.href);
+  if (projectId) {
+    url.searchParams.set("project", projectId);
+  } else {
+    url.searchParams.delete("project");
+  }
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (next !== current) {
+    window.history.replaceState(null, "", next);
+  }
+}
+
+function formViewUrl(projectId) {
+  return `/view?project=${encodeURIComponent(projectId)}`;
+}
+
+function updateDocumentTitle() {
+  const project = selectedProject();
+  const base = t("appTitle");
+  document.title = project?.title ? `${project.title} · ${base}` : base;
 }
 
 function t(key, params = {}) {
@@ -459,7 +519,10 @@ async function loadProjects() {
       ? `${state.projects.length}개 프로젝트`
       : `${state.projects.length} project${state.projects.length === 1 ? "" : "s"}`;
 
-  if (!state.selectedProjectId && state.projects.length > 0) {
+  const urlProjectId = projectIdFromUrl();
+  if (urlProjectId && state.projects.some((project) => project.id === urlProjectId)) {
+    state.selectedProjectId = urlProjectId;
+  } else if (!state.selectedProjectId && state.projects.length > 0) {
     state.selectedProjectId = state.projects[0].id;
   }
 
@@ -483,23 +546,50 @@ function renderProjects() {
   }
 
   for (const project of state.projects) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "project-item";
-    button.classList.toggle("active", project.id === state.selectedProjectId);
-    button.innerHTML = `
-      <p class="item-title"></p>
-      <p class="item-meta"></p>
+    const item = document.createElement("div");
+    item.className = "project-item";
+    item.classList.toggle("active", project.id === state.selectedProjectId);
+    item.innerHTML = `
+      <button type="button" class="project-select">
+        <p class="item-title"></p>
+        <p class="item-meta"></p>
+      </button>
+      <button type="button" class="project-delete" title="${escapeHtml(t("delete"))}" aria-label="${escapeHtml(t("delete"))}">✕</button>
     `;
-    button.querySelector(".item-title").textContent = project.title;
-    button.querySelector(".item-meta").textContent =
+    item.querySelector(".item-title").textContent = project.title;
+    item.querySelector(".item-meta").textContent =
       `${statusLabel(project.status)} - ${phaseLabel(project.current_phase)} - ${formatDate(project.updated_at)}`;
-    button.addEventListener("click", async () => {
+    item.querySelector(".project-select").addEventListener("click", async () => {
       state.selectedProjectId = project.id;
       renderProjects();
       await renderSelectedProject();
     });
-    els.projectList.append(button);
+    item.querySelector(".project-delete").addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await deleteProject(project);
+    });
+    els.projectList.append(item);
+  }
+}
+
+async function deleteProject(project) {
+  const confirmed = window.confirm(
+    t("deleteProjectConfirm", { title: project.title }),
+  );
+  if (!confirmed) return;
+
+  try {
+    await api(`/projects/${project.id}`, { method: "DELETE" });
+    if (state.selectedProjectId === project.id) {
+      state.selectedProjectId = null;
+      state.questions = [];
+      state.artifacts = [];
+      state.progress = null;
+    }
+    showToast(t("projectDeleted"));
+    await loadProjects();
+  } catch (error) {
+    showToast(error.message, true);
   }
 }
 
@@ -508,6 +598,9 @@ async function renderSelectedProject() {
 
   els.emptyState.classList.toggle("hidden", Boolean(project));
   els.projectDetail.classList.toggle("hidden", !project);
+
+  syncProjectInUrl(project?.id || null);
+  updateDocumentTitle();
 
   if (!project) return;
 
@@ -629,34 +722,15 @@ function startRunPolling() {
 }
 
 function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+  return DocuGenMarkdown.escapeHtml(value);
 }
 
 function inlineMarkdown(value) {
-  return escapeHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-      '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
-    );
+  return DocuGenMarkdown.inlineMarkdown(value);
 }
 
-function slugifyHeading(value, counts) {
-  const base = String(value || "")
-    .toLowerCase()
-    .replace(/<[^>]+>/g, "")
-    .replace(/[^\p{L}\p{N}\s-]/gu, "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .slice(0, 80) || "section";
-  counts[base] = (counts[base] || 0) + 1;
-  return counts[base] === 1 ? base : `${base}-${counts[base]}`;
+function renderMarkdown(markdown) {
+  return DocuGenMarkdown.renderMarkdown(markdown, { emptyMessage: t("draftEmpty") });
 }
 
 function renderToc(toc) {
@@ -672,188 +746,6 @@ function renderToc(toc) {
         .join("")}
     </nav>
   `;
-}
-
-function renderMarkdown(markdown) {
-  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
-  const html = [];
-  const toc = [];
-  const headingCounts = {};
-  let paragraph = [];
-  let listOpen = false;
-  let orderedListOpen = false;
-  let blockquote = [];
-  let codeOpen = false;
-  let codeLines = [];
-
-  function flushParagraph() {
-    if (paragraph.length === 0) return;
-    html.push(`<p>${inlineMarkdown(paragraph.join(" "))}</p>`);
-    paragraph = [];
-  }
-
-  function closeList() {
-    if (!listOpen) return;
-    html.push("</ul>");
-    listOpen = false;
-  }
-
-  function closeOrderedList() {
-    if (!orderedListOpen) return;
-    html.push("</ol>");
-    orderedListOpen = false;
-  }
-
-  function flushBlockquote() {
-    if (blockquote.length === 0) return;
-    html.push(`<blockquote>${blockquote.map((line) => `<p>${inlineMarkdown(line)}</p>`).join("")}</blockquote>`);
-    blockquote = [];
-  }
-
-  function closeCode() {
-    if (!codeOpen) return;
-    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-    codeLines = [];
-    codeOpen = false;
-  }
-
-  function splitTableRow(row) {
-    return row
-      .trim()
-      .replace(/^\|/, "")
-      .replace(/\|$/, "")
-      .split("|")
-      .map((cell) => cell.trim());
-  }
-
-  function isTableSeparator(row) {
-    const cells = splitTableRow(row);
-    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
-  }
-
-  function renderTable(headers, rows) {
-    const headerHtml = headers.map((header) => `<th>${inlineMarkdown(header)}</th>`).join("");
-    const rowHtml = rows
-      .map((row) => {
-        const cells = headers.map((_, index) => `<td>${inlineMarkdown(row[index] || "")}</td>`).join("");
-        return `<tr>${cells}</tr>`;
-      })
-      .join("");
-    return `<div class="table-scroll"><table><thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table></div>`;
-  }
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line.trim().startsWith("```")) {
-      if (codeOpen) {
-        closeCode();
-      } else {
-        flushParagraph();
-        closeList();
-        closeOrderedList();
-        flushBlockquote();
-        codeOpen = true;
-      }
-      continue;
-    }
-
-    if (codeOpen) {
-      codeLines.push(line);
-      continue;
-    }
-
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushParagraph();
-      closeList();
-      closeOrderedList();
-      flushBlockquote();
-      continue;
-    }
-
-    const nextLine = lines[index + 1]?.trim() || "";
-    if (trimmed.includes("|") && isTableSeparator(nextLine)) {
-      flushParagraph();
-      closeList();
-      closeOrderedList();
-      flushBlockquote();
-      const headers = splitTableRow(trimmed);
-      const rows = [];
-      index += 2;
-      while (index < lines.length) {
-        const rowLine = lines[index].trim();
-        if (!rowLine || !rowLine.includes("|") || rowLine.startsWith("```")) {
-          index -= 1;
-          break;
-        }
-        rows.push(splitTableRow(rowLine));
-        index += 1;
-      }
-      html.push(renderTable(headers, rows));
-      continue;
-    }
-
-    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      closeList();
-      closeOrderedList();
-      flushBlockquote();
-      const level = heading[1].length;
-      const text = heading[2].trim();
-      const id = slugifyHeading(text, headingCounts);
-      toc.push({ id, level, text });
-      html.push(`<h${level} id="${escapeHtml(id)}">${inlineMarkdown(text)}</h${level}>`);
-      continue;
-    }
-
-    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
-    if (bullet) {
-      flushParagraph();
-      closeOrderedList();
-      flushBlockquote();
-      if (!listOpen) {
-        html.push("<ul>");
-        listOpen = true;
-      }
-      html.push(`<li>${inlineMarkdown(bullet[1])}</li>`);
-      continue;
-    }
-
-    const numbered = trimmed.match(/^\d+\.\s+(.+)$/);
-    if (numbered) {
-      flushParagraph();
-      closeList();
-      flushBlockquote();
-      if (!orderedListOpen) {
-        html.push("<ol>");
-        orderedListOpen = true;
-      }
-      html.push(`<li>${inlineMarkdown(numbered[1])}</li>`);
-      continue;
-    }
-
-    const quote = trimmed.match(/^>\s?(.+)$/);
-    if (quote) {
-      flushParagraph();
-      closeList();
-      closeOrderedList();
-      blockquote.push(quote[1]);
-      continue;
-    }
-
-    paragraph.push(trimmed);
-  }
-
-  closeCode();
-  flushParagraph();
-  closeList();
-  closeOrderedList();
-  flushBlockquote();
-  return {
-    html: html.join("\n") || `<p>${escapeHtml(t("draftEmpty"))}</p>`,
-    toc,
-  };
 }
 
 function renderKeyValueList(items) {
@@ -1024,20 +916,20 @@ function renderQuestions() {
     item.querySelector(".item-body").textContent = questionText;
 
     if (question.status === "pending") {
-      const answerRow = document.createElement("form");
+      const answerRow = document.createElement("div");
       answerRow.className = "answer-row";
       answerRow.innerHTML = `
-        <input aria-label="${escapeHtml(t("answer"))}" required placeholder="${escapeHtml(t("answer"))}" />
-        <button type="submit">${escapeHtml(t("answer"))}</button>
+        <input aria-label="${escapeHtml(t("answer"))}" placeholder="${escapeHtml(t("answer"))}" />
       `;
       const input = answerRow.querySelector("input");
       input.value = getAnswerDraft(question.id);
       input.addEventListener("input", () => {
         setAnswerDraft(question.id, input.value);
       });
-      answerRow.addEventListener("submit", async (event) => {
+      input.addEventListener("keydown", async (event) => {
+        if (event.key !== "Enter") return;
         event.preventDefault();
-        await answerQuestion(question.id, input.value);
+        await saveAllAnswers();
       });
       item.append(answerRow);
     } else {
@@ -1066,6 +958,18 @@ function renderQuestions() {
 
     els.questionList.append(item);
   }
+
+  if (sorted.some((question) => question.status === "pending")) {
+    const batchBar = document.createElement("div");
+    batchBar.className = "answer-batch-actions";
+    batchBar.innerHTML = `
+      <button type="button" class="save-all">${escapeHtml(t("saveAllAnswers"))}</button>
+    `;
+    batchBar.querySelector(".save-all").addEventListener("click", async () => {
+      await saveAllAnswers();
+    });
+    els.questionList.append(batchBar);
+  }
 }
 
 async function answerQuestion(questionId, answer) {
@@ -1079,6 +983,47 @@ async function answerQuestion(questionId, answer) {
   clearAnswerDraft(questionId);
   showToast(t("answerSaved"));
   await Promise.all([loadQuestions(), loadProjects()]);
+}
+
+function pendingAnswerEntries() {
+  return state.questions
+    .filter((question) => question.status === "pending")
+    .map((question) => ({
+      id: question.id,
+      answer: getAnswerDraft(question.id).trim(),
+    }))
+    .filter((entry) => entry.answer);
+}
+
+async function saveAllAnswers({ startRun = false } = {}) {
+  const project = selectedProject();
+  if (!project) return;
+
+  const entries = pendingAnswerEntries();
+  if (entries.length === 0) {
+    showToast(t("noAnswersToSave"), true);
+    return;
+  }
+
+  try {
+    for (const entry of entries) {
+      await api(`/projects/${project.id}/questions/${entry.id}/answer`, {
+        method: "POST",
+        body: JSON.stringify({ answer: entry.answer }),
+      });
+      clearAnswerDraft(entry.id);
+    }
+  } catch (error) {
+    showToast(error.message, true);
+    await Promise.all([loadQuestions(), loadProjects()]).catch(() => {});
+    return;
+  }
+
+  showToast(t("answersSaved", { count: entries.length }));
+  await Promise.all([loadQuestions(), loadProjects()]);
+  if (startRun) {
+    await startWritingRun();
+  }
 }
 
 async function updateAnswer(questionId, answer) {
@@ -1150,26 +1095,181 @@ function renderDraftPreview() {
   const draft = latestDraft();
   if (!draft) {
     els.draftStatus.textContent = t("noDraft");
+    if (els.formViewButton) {
+      els.formViewButton.disabled = true;
+    }
     els.draftToc.classList.add("hidden");
     els.draftToc.innerHTML = "";
+    els.draftViewer.classList.add("no-toc");
     els.draftPreview.classList.add("markdown-body");
+    els.draftPreview.classList.remove("raw");
     els.draftPreview.textContent = t("draftEmpty");
     return;
+  }
+  if (els.formViewButton) {
+    els.formViewButton.disabled = false;
   }
   els.draftStatus.textContent = `v${draft.version}`;
   const markdown = artifactBodyText(draft);
   els.draftViewToggle.textContent = state.draftView === "rendered" ? t("raw") : t("rendered");
   els.draftPreview.classList.toggle("markdown-body", state.draftView === "rendered");
+  els.draftPreview.classList.toggle("raw", state.draftView !== "rendered");
   if (state.draftView === "rendered") {
     const rendered = renderMarkdown(markdown);
     els.draftPreview.innerHTML = rendered.html;
     els.draftToc.innerHTML = renderToc(rendered.toc);
     els.draftToc.classList.toggle("hidden", rendered.toc.length === 0);
+    els.draftViewer.classList.toggle("no-toc", rendered.toc.length === 0);
+    attachSectionFeedbackButtons();
+    renderMermaidDiagrams();
   } else {
     els.draftToc.classList.add("hidden");
     els.draftToc.innerHTML = "";
+    els.draftViewer.classList.add("no-toc");
     els.draftPreview.textContent = markdown;
   }
+}
+
+let mermaidReady = false;
+
+function renderMermaidDiagrams() {
+  const nodes = [...els.draftPreview.querySelectorAll(".mermaid")];
+  if (nodes.length === 0 || !window.mermaid) return;
+  if (!mermaidReady) {
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      suppressErrorRendering: true,
+    });
+    mermaidReady = true;
+  }
+  // Mermaid clears a node it fails to parse, so keep the source for fallback.
+  for (const node of nodes) {
+    node.dataset.source = node.textContent;
+  }
+  window.mermaid.run({ nodes }).catch(() => {
+    // Invalid diagram source: show it as a plain code block instead.
+    for (const node of els.draftPreview.querySelectorAll(".mermaid")) {
+      if (node.querySelector("svg")) continue;
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      code.textContent = node.dataset.source || node.textContent;
+      pre.append(code);
+      node.replaceWith(pre);
+    }
+  });
+}
+
+function sectionDraftIds() {
+  const ids = new Set();
+  for (const artifact of state.artifacts) {
+    if (artifact.type !== "section_draft") continue;
+    const id = artifact.content?.section?.id;
+    if (id) ids.add(String(id));
+  }
+  return ids;
+}
+
+function attachSectionFeedbackButtons() {
+  const ids = sectionDraftIds();
+  if (ids.size === 0) return;
+  for (const heading of els.draftPreview.querySelectorAll("h2, h3, h4, h5, h6")) {
+    const match = heading.textContent.trim().match(/^(\d+(?:\.\d+)*)\s/);
+    if (!match || !ids.has(match[1])) continue;
+    const sectionId = match[1];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "section-feedback-button";
+    button.title = t("feedbackPanelTitle", { id: sectionId });
+    button.textContent = "💬";
+    button.addEventListener("click", () => toggleSectionFeedbackPanel(sectionId, heading));
+    heading.append(button);
+  }
+}
+
+function renderFeedbackHistory(container, items) {
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = `<p class="item-meta">${escapeHtml(t("noFeedback"))}</p>`;
+    return;
+  }
+  for (const item of items) {
+    const entry = document.createElement("article");
+    entry.className = "feedback-entry";
+    entry.innerHTML = `
+      <div class="feedback-entry-meta">
+        <span class="feedback-badge"></span>
+        <span class="feedback-time"></span>
+      </div>
+      <p class="feedback-text"></p>
+    `;
+    const badge = entry.querySelector(".feedback-badge");
+    badge.textContent = item.applied ? t("feedbackApplied") : t("feedbackPending");
+    badge.classList.add(item.applied ? "applied" : "pending");
+    entry.querySelector(".feedback-time").textContent = formatDate(item.created_at);
+    entry.querySelector(".feedback-text").textContent = item.answer;
+    container.append(entry);
+  }
+}
+
+async function toggleSectionFeedbackPanel(sectionId, heading) {
+  const project = selectedProject();
+  if (!project) return;
+
+  const wasOpen = els.draftPreview.querySelector(
+    `.section-feedback-panel[data-section-id="${sectionId}"]`,
+  );
+  for (const panel of els.draftPreview.querySelectorAll(".section-feedback-panel")) {
+    panel.remove();
+  }
+  if (wasOpen) return;
+
+  const panel = document.createElement("div");
+  panel.className = "section-feedback-panel";
+  panel.dataset.sectionId = sectionId;
+  panel.innerHTML = `
+    <p class="feedback-panel-title"></p>
+    <div class="feedback-history"></div>
+    <textarea rows="3" placeholder="${escapeHtml(t("feedbackPlaceholder"))}"></textarea>
+    <div class="answer-batch-actions">
+      <button type="button" class="feedback-save">${escapeHtml(t("saveComment"))}</button>
+      <button type="button" class="secondary feedback-close">${escapeHtml(t("close"))}</button>
+    </div>
+  `;
+  panel.querySelector(".feedback-panel-title").textContent = t("feedbackPanelTitle", {
+    id: sectionId,
+  });
+  heading.insertAdjacentElement("afterend", panel);
+
+  const history = panel.querySelector(".feedback-history");
+  const feedbackUrl = `/projects/${project.id}/sections/${encodeURIComponent(sectionId)}/feedback`;
+  const loadHistory = async () => {
+    try {
+      renderFeedbackHistory(history, await api(feedbackUrl));
+    } catch (error) {
+      history.innerHTML = `<p class="item-meta">${escapeHtml(error.message)}</p>`;
+    }
+  };
+  await loadHistory();
+
+  const textarea = panel.querySelector("textarea");
+  panel.querySelector(".feedback-save").addEventListener("click", async () => {
+    const comment = textarea.value.trim();
+    if (!comment) return;
+    try {
+      await api(feedbackUrl, {
+        method: "POST",
+        body: JSON.stringify({ comment }),
+      });
+      textarea.value = "";
+      showToast(t("feedbackSaved", { id: sectionId }));
+      await loadHistory();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+  panel.querySelector(".feedback-close").addEventListener("click", () => panel.remove());
+  textarea.focus();
 }
 
 function renderNextAction() {
@@ -1189,8 +1289,10 @@ function renderNextAction() {
         : `Answer ${pendingCount} question${pendingCount === 1 ? "" : "s"}`;
     els.nextActionBody.textContent = t("writerNeedsInput");
     els.nextActionItems.classList.remove("hidden");
+    const form = document.createElement("form");
+    form.className = "quick-answer-form";
     for (const question of state.questions.filter((item) => item.status === "pending")) {
-      const item = document.createElement("form");
+      const item = document.createElement("div");
       item.className = "quick-question";
       const questionText =
         typeof question.question.question === "string"
@@ -1198,10 +1300,7 @@ function renderNextAction() {
           : JSON.stringify(question.question);
       item.innerHTML = `
         <p></p>
-        <div class="answer-row">
-          <input aria-label="${escapeHtml(t("answer"))}" required placeholder="${escapeHtml(t("answer"))}" />
-          <button type="submit">${escapeHtml(t("answer"))}</button>
-        </div>
+        <input aria-label="${escapeHtml(t("answer"))}" placeholder="${escapeHtml(t("answer"))}" />
       `;
       item.querySelector("p").textContent = questionText;
       const input = item.querySelector("input");
@@ -1209,12 +1308,23 @@ function renderNextAction() {
       input.addEventListener("input", () => {
         setAnswerDraft(question.id, input.value);
       });
-      item.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        await answerQuestion(question.id, input.value);
-      });
-      els.nextActionItems.append(item);
+      form.append(item);
     }
+    const actions = document.createElement("div");
+    actions.className = "answer-batch-actions";
+    actions.innerHTML = `
+      <button type="submit">${escapeHtml(t("saveAnswersAndRun"))}</button>
+      <button type="button" class="secondary save-only">${escapeHtml(t("saveAllAnswers"))}</button>
+    `;
+    actions.querySelector(".save-only").addEventListener("click", async () => {
+      await saveAllAnswers();
+    });
+    form.append(actions);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveAllAnswers({ startRun: true });
+    });
+    els.nextActionItems.append(form);
     return;
   }
 
@@ -1254,6 +1364,7 @@ function renderTabs() {
 
 function rerenderCurrentView() {
   applyStaticTranslations();
+  updateDocumentTitle();
   els.projectCount.textContent =
     state.language === "ko"
       ? `${state.projects.length}개 프로젝트`
@@ -1318,6 +1429,16 @@ els.draftViewToggle.addEventListener("click", () => {
   renderDraftPreview();
 });
 
+els.formViewButton?.addEventListener("click", () => {
+  const project = selectedProject();
+  if (!project) return;
+  if (!latestDraft()) {
+    showToast(t("noDraft"), true);
+    return;
+  }
+  window.open(formViewUrl(project.id), "_blank", "noopener,noreferrer");
+});
+
 els.exportButton.addEventListener("click", async () => {
   const project = selectedProject();
   if (!project) return;
@@ -1363,7 +1484,7 @@ for (const button of document.querySelectorAll(".tab-button")) {
   });
 }
 
-els.runButton.addEventListener("click", async () => {
+async function startWritingRun() {
   const project = selectedProject();
   if (!project) return;
 
@@ -1384,28 +1505,14 @@ els.runButton.addEventListener("click", async () => {
     setRunButtonRunning(false);
     await loadProgress().catch(() => {});
   }
-});
+}
+
+els.runButton.addEventListener("click", startWritingRun);
 
 els.deleteProjectButton.addEventListener("click", async () => {
   const project = selectedProject();
   if (!project) return;
-
-  const confirmed = window.confirm(
-    t("deleteProjectConfirm", { title: project.title }),
-  );
-  if (!confirmed) return;
-
-  try {
-    await api(`/projects/${project.id}`, { method: "DELETE" });
-    state.selectedProjectId = null;
-    state.questions = [];
-    state.artifacts = [];
-    state.progress = null;
-    showToast(t("projectDeleted"));
-    await loadProjects();
-  } catch (error) {
-    showToast(error.message, true);
-  }
+  await deleteProject(project);
 });
 
 els.projectForm.addEventListener("submit", async (event) => {

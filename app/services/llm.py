@@ -272,6 +272,21 @@ def _tokenize(text: str) -> set[str]:
     return {word for word in str(text or "").lower().split() if len(word) >= 2}
 
 
+def _section_words(section: Dict[str, Any]) -> set[str]:
+    return _tokenize(
+        " ".join(
+            [str(section.get("title", "")), str(section.get("purpose", ""))]
+            + [str(point) for point in (section.get("key_points") or [])]
+        )
+    )
+
+
+def _source_words(source: Dict[str, Any]) -> set[str]:
+    return _tokenize(
+        " ".join(str(source.get(key, "")) for key in ("title", "snippet", "summary"))
+    )
+
+
 def select_relevant_sources(
     section: Dict[str, Any],
     sources: list[Dict[str, Any]],
@@ -282,24 +297,26 @@ def select_relevant_sources(
     if len(usable) <= limit:
         return usable
 
-    section_words = _tokenize(
-        " ".join(
-            [str(section.get("title", "")), str(section.get("purpose", ""))]
-            + [str(point) for point in (section.get("key_points") or [])]
-        )
-    )
+    section_words = _section_words(section)
 
     def score(source: Dict[str, Any]) -> int:
-        source_words = _tokenize(
-            " ".join(
-                str(source.get(key, ""))
-                for key in ("title", "snippet", "summary")
-            )
-        )
-        return len(section_words & source_words)
+        return len(section_words & _source_words(source))
 
     ranked = sorted(usable, key=score, reverse=True)
     return ranked[:limit]
+
+
+def best_overlap_score(section: Dict[str, Any], sources: list[Dict[str, Any]]) -> int:
+    """Largest keyword overlap between the section and any of its sources."""
+    section_words = _section_words(section)
+    return max(
+        (
+            len(section_words & _source_words(source))
+            for source in sources
+            if isinstance(source, dict) and source.get("url")
+        ),
+        default=0,
+    )
 
 
 def _source_context(sources: list[Dict[str, Any]], per_source_cap: int = 400) -> str:
@@ -899,11 +916,27 @@ def write_section_with_summary(
     previous_summary: Dict[str, Any] | None,
     sources: list[Dict[str, Any]],
     section_titles: list[str],
+    feedback: list[str] | None = None,
 ) -> tuple[str, Dict[str, Any], dict[str, Any] | None]:
     style = str(brief.get("style") or brief.get("tone") or "match the initial request")
     target_length = section.get("target_length") or 500
     depth = section.get("depth") or 3
     titles_block = "\n".join(f"- {title}" for title in section_titles) or "- (none)"
+    feedback_block = ""
+    if feedback:
+        feedback_lines = "\n".join(f"- {_clip(comment, 400)}" for comment in feedback[:8])
+        feedback_block = f"""
+
+User improvement requests for this section (must be reflected):
+{feedback_lines}"""
+    diagram_rule = ""
+    if settings.diagrams_enabled:
+        diagram_rule = (
+            "\n- If a process, structure, or comparison is much clearer as a diagram, "
+            'you may add ONE ```mermaid code block (flowchart TD or sequenceDiagram). '
+            "Keep node labels short, wrap labels containing special characters in "
+            'double quotes, and never put citation markers inside the diagram.'
+        )
     content, usage = _chat_content(
         [
             {
@@ -933,7 +966,7 @@ Previous section summary JSON:
 {json.dumps(_clip_summary(previous_summary), ensure_ascii=False)}
 
 Relevant sources:
-{_source_context(sources)}
+{_source_context(sources)}{feedback_block}
 
 Write only this section in Markdown, in the same language as the brief topic.
 Rules:
@@ -943,7 +976,7 @@ Rules:
 - Do NOT add sub-headings inside this section. Use bold lead-ins or lists instead.
 - Do not repeat content from the previous summary or topics owned by other sections.
 - When a source above supports a statement, cite it inline as [1] or [2] matching
-  the source numbers. Do not cite sources that are not listed.
+  the source numbers. Do not cite sources that are not listed.{diagram_rule}
 
 Return this JSON shape:
 {{
@@ -1101,8 +1134,10 @@ Merge the sections into one coherent Markdown document. Smooth transitions,
 remove obvious duplication, and keep the same language as the drafts. Preserve
 all outline numbering in headings, such as "## 1 Title" and
 "### 1.2 Section title". Do not remove or renumber heading prefixes. Preserve
-inline citation markers such as [1]. Add a final "Sources" section with the
-source title and URL for each source that was used. Return either:
+inline citation links such as [[1]](https://example.com) exactly as written;
+do not renumber or unlink them. Keep ```mermaid code blocks unchanged. Add a final "Sources" section listing each
+search source above as "N. [title](url)" using the same numbers as the inline
+citations. Return either:
 {{
   "markdown": "# Title\\n\\nFinal document..."
 }}
@@ -1245,6 +1280,63 @@ Return this JSON shape:
         markdown = _markdown_from_parsed_response(parsed, content, "Section reviser")
     if not isinstance(markdown, str) or not markdown.strip():
         raise LLMError("Section reviser response missing markdown")
+    return markdown, usage
+
+
+def revise_section_with_feedback(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    draft: Dict[str, Any],
+    comments: list[str],
+) -> tuple[str, dict[str, Any] | None]:
+    section = draft.get("section") or {}
+    style = str(brief.get("style") or brief.get("tone") or "match the document")
+    comment_lines = "\n".join(f"- {_clip(comment, 400)}" for comment in comments[:8])
+    content, usage = _chat_content(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You rewrite one document section to apply the user's improvement "
+                    f"requests. Writing style/register: {style}. Return valid JSON when possible."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"""
+Project title:
+{project.title}
+
+Section JSON:
+{json.dumps(section, ensure_ascii=False)}
+
+Current section Markdown:
+{draft.get("markdown", "")}
+
+User improvement requests (apply all of them):
+{comment_lines}
+
+Rewrite this section so every request above is reflected. Keep the same heading
+(level, numbering, title), the same language, and the register "{style}".
+Preserve inline citation markers such as [1] unless a request says otherwise.
+Do not add content that belongs to other sections.
+
+Return this JSON shape:
+{{
+  "markdown": ""
+}}
+""".strip(),
+            },
+        ]
+    )
+    try:
+        parsed = _extract_json_object(content)
+    except LLMError:
+        markdown = _strip_fence(content)
+    else:
+        markdown = _markdown_from_parsed_response(parsed, content, "Feedback reviser")
+    if not isinstance(markdown, str) or not markdown.strip():
+        raise LLMError("Feedback reviser response missing markdown")
     return markdown, usage
 
 

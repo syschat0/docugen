@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- seo-head -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap"
+    />
+    <link rel="stylesheet" href="/ui/view/view.css" />
+  </head>
+  <body>
+    <noscript id="seoNoscript"><!-- seo-noscript --></noscript>
+
+    <header class="view-toolbar">
+      <div>
+        <p class="view-eyebrow" id="toolbarEyebrow">LLM Document Agent</p>
+        <h1 id="toolbarTitle">Document View</h1>
+        <p id="toolbarMeta"></p>
+      </div>
+      <div class="view-toolbar-actions">
+        <a id="backLink" href="/ui/">Back to editor</a>
+        <button id="printButton" type="button">Print</button>
+      </div>
+    </header>
+
+    <main id="viewStage" class="view-stage hidden">
+      <article class="a4-document" itemscope itemtype="https://schema.org/Article">
+        <header class="doc-header">
+          <h1 id="docTitle" class="doc-title" itemprop="headline"></h1>
+          <p id="docMeta" class="doc-meta">
+            <time id="docModified" itemprop="dateModified" datetime=""></time>
+          </p>
+        </header>
+        <div id="docBody" class="a4-body markdown-body" itemprop="articleBody"></div>
+      </article>
+    </main>
+
+    <section id="viewEmpty" class="view-empty hidden">
+      <h2 id="emptyTitle">No draft</h2>
+      <p id="emptyBody"></p>
+    </section>
+
+    <section id="viewError" class="view-error hidden">
+      <h2 id="errorTitle">Error</h2>
+      <p id="errorBody"></p>
+    </section>
+
+    <script src="/ui/vendor/mermaid.min.js"></script>
+    <script src="/ui/markdown.js"></script>
+    <script src="/ui/view/view.js"></script>
+  </body>
+</html>

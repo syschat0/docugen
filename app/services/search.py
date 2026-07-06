@@ -348,6 +348,62 @@ def research_chapters(
     return {"enabled": True, "query_source": query_source, "chapters": entries}
 
 
+def build_section_query(section: dict[str, Any]) -> str:
+    """Short keyword query for one leaf section (title + first key point)."""
+    title = str(section.get("title") or "")
+    if ":" in title:
+        title = title.split(":", 1)[1].strip() or title
+    key_points = [
+        str(point).strip() for point in (section.get("key_points") or []) if str(point).strip()
+    ]
+    first_point = key_points[0] if key_points else ""
+    if first_point and first_point.lower() != title.lower():
+        return _truncate_at_word(f"{title} {first_point}", _MAX_QUERY_CHARS)
+    return _truncate_at_word(title, _MAX_QUERY_CHARS)
+
+
+def search_section_sources(
+    section: dict[str, Any], limit: int
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Top-up search for one section whose planned sources are irrelevant."""
+    if not settings.search_enabled:
+        return [], None
+    query = build_section_query(section)
+    if not query:
+        return [], None
+
+    results: list[dict[str, str]] = []
+    error: str | None = None
+    if settings.search_backend in {"auto", "browser"}:
+        try:
+            from app.services.browser_search import search_grouped
+
+            grouped = search_grouped([query], limit)
+            results = (grouped[0].get("results") or [])[:limit] if grouped else []
+            error = grouped[0].get("error") if grouped else None
+        except Exception as exc:
+            if settings.search_backend == "browser":
+                return [], f"browser search unavailable: {exc}"
+
+    if not results:
+        http_results, http_error = _search_once(query)
+        results = http_results[:limit]
+        error = error or http_error
+
+    sources = [
+        {
+            "title": result.get("title", ""),
+            "url": result.get("url", ""),
+            "snippet": result.get("snippet", ""),
+            "summary": result.get("snippet", ""),
+            "query": query,
+        }
+        for result in results
+        if result.get("url")
+    ]
+    return sources, (None if sources else error)
+
+
 def _summaries_via_browser(results: list[dict[str, Any]]) -> list[dict[str, str]]:
     from app.services.browser_search import fetch_page_texts
 

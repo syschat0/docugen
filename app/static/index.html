@@ -17,7 +17,7 @@
     <link rel="stylesheet" href="/ui/styles.css" />
     <script>
       document.documentElement.dataset.theme =
-        localStorage.getItem("docugenTheme") || "simpsons";
+        localStorage.getItem("docugenTheme") || "pastel";
     </script>
   </head>
   <body>
@@ -31,8 +31,8 @@
           <label class="language-picker">
             <span data-i18n="theme">Theme</span>
             <select id="themeSelect" aria-label="Theme">
-              <option value="simpsons" data-i18n="themeSimpsons">Simpsons</option>
               <option value="pastel" data-i18n="themePastel">Pastel Watercolor</option>
+              <option value="simpsons" data-i18n="themeSimpsons">Simpsons</option>
             </select>
           </label>
           <label class="language-picker">
@@ -116,6 +116,7 @@
                 <h3 data-i18n="draftPreview">Draft Preview</h3>
                 <div class="inline-controls">
                   <span id="draftStatus" data-i18n="noDraft">No draft</span>
+                  <button id="formViewButton" type="button" class="secondary" data-i18n="formView">Form View</button>
                   <button id="draftViewToggle" type="button" class="secondary" data-i18n="raw">Raw</button>
                   <button id="exportButton" type="button" class="secondary" data-i18n="export">Export</button>
                 </div>
@@ -203,6 +204,8 @@
     </div>
 
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script src="/ui/vendor/mermaid.min.js"></script>
+    <script src="/ui/markdown.js"></script>
     <script src="/ui/app.js"></script>
   </body>
 </html>

@@ -3,7 +3,6 @@
  * Component rules below only reference tokens, so adding a theme means
  * adding one token block (plus optional theme-scoped tweaks at the end).
  */
-:root,
 :root[data-theme="simpsons"] {
   color-scheme: light;
   --page-bg:
@@ -52,6 +51,7 @@
   --heading-weight: 400;
 }
 
+:root,
 :root[data-theme="pastel"] {
   color-scheme: light;
   --page-bg:
@@ -310,13 +310,15 @@ label {
 }
 
 .project-item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
   width: 100%;
   border: var(--outline);
   border-radius: 12px;
   background: var(--surface);
   color: var(--text);
-  padding: 12px;
-  text-align: left;
+  padding: 6px;
   box-shadow: var(--shadow-small);
 }
 
@@ -327,6 +329,35 @@ label {
 
 .project-item.active {
   border-color: var(--blue);
+}
+
+.project-item .project-select {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 6px;
+  text-align: left;
+  box-shadow: none;
+}
+
+.project-item .project-delete {
+  align-self: center;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.project-item .project-delete:hover {
+  background: var(--input-bg);
+  color: var(--red, #c0392b);
 }
 
 .main-pane {
@@ -503,8 +534,12 @@ label {
   align-items: start;
 }
 
+.draft-viewer.no-toc {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .draft-toc {
-  max-height: 44vh;
+  max-height: 72vh;
   overflow: auto;
   position: sticky;
   top: 12px;
@@ -558,7 +593,8 @@ label {
 }
 
 .draft-preview {
-  max-height: 44vh;
+  max-height: 72vh;
+  min-height: 240px;
   overflow: auto;
   scroll-behavior: smooth;
   border: var(--border-thin);
@@ -568,6 +604,12 @@ label {
   margin: 0;
   padding: 14px;
   white-space: pre-wrap;
+}
+
+.draft-preview.raw {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "D2Coding", monospace;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .markdown-body {
@@ -618,6 +660,113 @@ label {
 .markdown-body a {
   color: var(--blue);
   text-decoration-thickness: 2px;
+}
+
+.markdown-body .mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0;
+  overflow-x: auto;
+}
+
+.section-feedback-panel {
+  white-space: normal;
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 16px;
+  padding: 12px;
+  border: var(--border-thin);
+  border-left: 4px solid var(--blue);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.feedback-panel-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.feedback-history {
+  display: grid;
+  gap: 8px;
+}
+
+.feedback-history .item-meta {
+  margin: 0;
+}
+
+.feedback-entry {
+  border: var(--border-thin);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px 10px;
+}
+
+.feedback-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feedback-badge {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.feedback-badge.applied {
+  background: rgba(46, 160, 67, 0.16);
+  color: #2b8a3e;
+}
+
+.feedback-badge.pending {
+  background: rgba(214, 158, 46, 0.18);
+  color: #b07d0a;
+}
+
+.feedback-text {
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.section-feedback-panel textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+
+.section-feedback-button {
+  margin-left: 8px;
+  padding: 0 6px;
+  font-size: 0.6em;
+  line-height: 1.6;
+  vertical-align: middle;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.section-feedback-button:hover {
+  opacity: 1;
+}
+
+.markdown-body a.citation-link {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 1;
+  text-decoration: none;
+  font-weight: 600;
 }
 
 .markdown-body code {
@@ -816,9 +965,25 @@ label {
 
 .answer-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin-top: 10px;
+}
+
+.quick-answer-form {
+  display: grid;
+  gap: 10px;
+}
+
+.quick-answer-form input {
+  width: 100%;
+}
+
+.answer-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .answer-actions {
