@@ -49,6 +49,15 @@ def renumber_citations(
     return renumbered, used_sources
 
 
+# Matches renumbered global citation links like "[[3]](https://example.com)".
+_GLOBAL_CITATION_PATTERN = re.compile(r"\[\[(\d+)\]\]\(")
+
+
+def global_citation_numbers(markdown: str) -> set[str]:
+    """Citation numbers cited via global links in the text."""
+    return set(_GLOBAL_CITATION_PATTERN.findall(str(markdown or "")))
+
+
 def format_sources_section(sources: list[Dict[str, Any]]) -> str:
     """Render the numbered "## Sources" block matching inline citation numbers."""
     lines = [

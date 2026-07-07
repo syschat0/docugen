@@ -42,6 +42,19 @@ def init_db() -> None:
               updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS project_references (
+              id TEXT PRIMARY KEY,
+              project_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              source TEXT NOT NULL,
+              title TEXT,
+              content_text TEXT,
+              status TEXT NOT NULL,
+              error TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+
             CREATE TABLE IF NOT EXISTS workflow_threads (
               id TEXT PRIMARY KEY,
               project_id TEXT NOT NULL,

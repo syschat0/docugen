@@ -1,4 +1,9 @@
-from app.services.llm import _clip, _clip_summary, select_relevant_sources
+from app.services.llm import (
+    _clip,
+    _clip_summary,
+    select_relevant_sources,
+    select_section_sources,
+)
 
 
 class TestClip:
@@ -65,3 +70,74 @@ class TestSelectRelevantSources:
 
     def test_empty_sources(self):
         assert select_relevant_sources({"title": "x"}, [], limit=2) == []
+
+
+class TestSelectSectionSources:
+    SECTION = {"title": "Docker 네트워크 구성", "key_points": ["브리지", "네트워크"]}
+    CHAPTER_RELEVANT = {
+        "title": "Docker 네트워크 개요",
+        "url": "https://ch1.com",
+        "summary": "docker 네트워크 기본",
+    }
+    CHAPTER_IRRELEVANT = {
+        "title": "요리 레시피",
+        "url": "https://ch2.com",
+        "snippet": "김치찌개 만들기",
+    }
+    GLOBAL_STRONG = {
+        "title": "Docker 네트워크 심화",
+        "url": "https://g1.com",
+        "summary": "docker 네트워크 브리지 설정",
+    }
+    GLOBAL_WEAK = {
+        "title": "Docker 설치",
+        "url": "https://g2.com",
+        "snippet": "docker 설치 방법",
+    }
+
+    def test_relevant_chapter_source_beats_stronger_global(self):
+        picked = select_section_sources(
+            self.SECTION,
+            [self.CHAPTER_RELEVANT],
+            [self.GLOBAL_STRONG, self.GLOBAL_WEAK],
+            limit=2,
+        )
+        assert picked[0]["url"] == "https://ch1.com"
+        assert picked[1]["url"] == "https://g1.com"
+
+    def test_irrelevant_chapter_sources_do_not_crowd_out_global(self):
+        picked = select_section_sources(
+            self.SECTION,
+            [self.CHAPTER_IRRELEVANT],
+            [self.GLOBAL_STRONG, self.GLOBAL_WEAK],
+            limit=2,
+        )
+        assert [source["url"] for source in picked] == ["https://g1.com", "https://g2.com"]
+
+    def test_deduplicates_by_url(self):
+        duplicate = {**self.CHAPTER_RELEVANT}
+        picked = select_section_sources(
+            self.SECTION,
+            [self.CHAPTER_RELEVANT],
+            [duplicate, self.GLOBAL_WEAK],
+            limit=2,
+        )
+        assert [source["url"] for source in picked] == ["https://ch1.com", "https://g2.com"]
+
+    def test_falls_back_to_combined_pool_when_no_overlap_anywhere(self):
+        picked = select_section_sources(
+            {"title": "완전히 다른 주제"},
+            [self.CHAPTER_IRRELEVANT],
+            [self.GLOBAL_WEAK],
+            limit=2,
+        )
+        assert len(picked) == 2
+
+    def test_skips_sources_without_url(self):
+        picked = select_section_sources(
+            self.SECTION,
+            [{"title": "Docker 네트워크", "summary": "docker 네트워크"}],
+            [self.GLOBAL_WEAK],
+            limit=2,
+        )
+        assert [source["url"] for source in picked] == ["https://g2.com"]

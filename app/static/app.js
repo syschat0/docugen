@@ -9,6 +9,7 @@ const state = {
   questions: [],
   answerDrafts: {},
   artifacts: [],
+  references: [],
   progress: null,
 };
 
@@ -88,6 +89,11 @@ const translations = {
     projects: "Projects",
     query: "Query",
     question: "Question",
+    referenceFiles: "Attachments (.txt, .md)",
+    referenceUrls: "Reference URLs (one per line)",
+    references: "References",
+    referencesFailed: "Some references could not be loaded: {errors}",
+    noReferences: "No references.",
     questionAdded: "Question added.",
     questions: "Questions",
     raw: "Raw",
@@ -109,6 +115,13 @@ const translations = {
     sectionDrafts: "Section drafts",
     sourceSummaries: "Source summaries",
     sources: "Sources",
+    noSourcesFound: "No sources found",
+    noSourcesUsed: "Written without sources",
+    usedSources: "Sources used",
+    fromChapterResearch: "chapter research",
+    chapterDigests: "Chapter digests",
+    glossary: "Glossary",
+    smoothedSeams: "Smoothed transitions",
     started: "started",
     startWriting: "Start Writing",
     startWritingAction: "Start writing",
@@ -205,6 +218,11 @@ const translations = {
     projects: "프로젝트",
     query: "검색어",
     question: "질문",
+    referenceFiles: "첨부 파일 (.txt, .md)",
+    referenceUrls: "참고 URL (한 줄에 하나)",
+    references: "참고 자료",
+    referencesFailed: "일부 참고 자료를 불러오지 못했습니다: {errors}",
+    noReferences: "참고 자료가 없습니다.",
     questionAdded: "질문을 추가했습니다.",
     questions: "질문",
     raw: "원문",
@@ -226,6 +244,13 @@ const translations = {
     sectionDrafts: "섹션 초안",
     sourceSummaries: "출처 요약",
     sources: "출처",
+    noSourcesFound: "검색된 출처가 없습니다.",
+    noSourcesUsed: "출처 없이 작성됨",
+    usedSources: "사용한 출처",
+    fromChapterResearch: "챕터 조사",
+    chapterDigests: "챕터 다이제스트",
+    glossary: "용어집",
+    smoothedSeams: "다듬은 전환부",
     started: "시작",
     startWriting: "작성 시작",
     startWritingAction: "작성 시작",
@@ -296,6 +321,12 @@ const els = {
   projectForm: document.querySelector("#projectForm"),
   projectTitle: document.querySelector("#projectTitle"),
   projectRequest: document.querySelector("#projectRequest"),
+  projectReferenceUrls: document.querySelector("#projectReferenceUrls"),
+  projectReferenceFiles: document.querySelector("#projectReferenceFiles"),
+  requestDetails: document.querySelector("#requestDetails"),
+  requestSummaryPreview: document.querySelector("#requestSummaryPreview"),
+  detailRequest: document.querySelector("#detailRequest"),
+  referenceList: document.querySelector("#referenceList"),
   projectList: document.querySelector("#projectList"),
   projectCount: document.querySelector("#projectCount"),
   emptyState: document.querySelector("#emptyState"),
@@ -407,9 +438,10 @@ function applyStaticTranslations() {
 }
 
 async function api(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(path, {
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(options.headers || {}),
     },
     ...options,
@@ -608,8 +640,10 @@ async function renderSelectedProject() {
   els.detailMeta.textContent =
     `${phaseLabel(project.current_phase)} - ${t("created")} ${formatDate(project.created_at)} - ${t("updated")} ${formatDate(project.updated_at)}`;
   els.detailStatus.textContent = statusLabel(project.status);
+  els.detailRequest.textContent = project.initial_request;
+  els.requestSummaryPreview.textContent = project.initial_request.split("\n")[0];
 
-  await Promise.all([loadProgress(), loadQuestions(), loadArtifacts()]);
+  await Promise.all([loadProgress(), loadQuestions(), loadArtifacts(), loadReferences()]);
   renderNextAction();
   renderDraftPreview();
   renderTabs();
@@ -627,6 +661,56 @@ async function loadProgress() {
 
   state.progress = await api(`/projects/${project.id}/progress`);
   renderProgress();
+}
+
+async function loadReferences() {
+  const project = selectedProject();
+  if (!project) return;
+
+  state.references = await api(`/projects/${project.id}/references`);
+  renderReferences();
+}
+
+function renderReferences() {
+  els.referenceList.innerHTML = "";
+  if (!state.references.length) {
+    const empty = document.createElement("p");
+    empty.className = "item-meta";
+    empty.textContent = t("noReferences");
+    els.referenceList.append(empty);
+    return;
+  }
+
+  for (const reference of state.references) {
+    const item = document.createElement("div");
+    item.className = "reference-item";
+
+    const icon = document.createElement("span");
+    icon.textContent = reference.kind === "url" ? "🔗" : "📄";
+    item.append(icon);
+
+    if (reference.kind === "url") {
+      const link = document.createElement("a");
+      link.href = reference.source;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = reference.title || reference.source;
+      item.append(link);
+    } else {
+      const name = document.createElement("span");
+      name.textContent = reference.source;
+      item.append(name);
+    }
+
+    if (reference.status === "error") {
+      const error = document.createElement("span");
+      error.className = "reference-error";
+      error.textContent = reference.error || t("error");
+      item.append(error);
+    }
+
+    els.referenceList.append(item);
+  }
 }
 
 function renderProgress() {
@@ -760,6 +844,30 @@ function renderBullets(items) {
   return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
 }
 
+function renderSourceLinks(sources) {
+  if (!sources || sources.length === 0) {
+    return `<p class="item-meta">${escapeHtml(t("noSourcesFound"))}</p>`;
+  }
+  return `<ul class="source-list">${sources
+    .map(
+      (source) =>
+        `<li><a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.title || source.url)}</a>${source.summary ? `<span class="source-summary">${escapeHtml(source.summary)}</span>` : ""}</li>`,
+    )
+    .join("")}</ul>`;
+}
+
+function renderUsedSources(sources) {
+  if (!sources || sources.length === 0) {
+    return `<p class="item-meta">${escapeHtml(t("noSourcesUsed"))}</p>`;
+  }
+  return `<p class="item-meta">${escapeHtml(t("usedSources"))}</p><ul class="source-list">${sources
+    .map(
+      (source) =>
+        `<li><a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.title || source.url)}</a>${source.from_chapter_research ? ` <span class="source-badge">${escapeHtml(t("fromChapterResearch"))}</span>` : ""}</li>`,
+    )
+    .join("")}</ul>`;
+}
+
 function renderStepDetails(step) {
   const details = step.details || {};
   if (step.error) {
@@ -832,13 +940,35 @@ function renderStepDetails(step) {
           )
           .join("")}</ul>`,
       ].join("");
+    case "chapter_research":
+      return [
+        renderKeyValueList([
+          [t("chapters"), details.chapter_count],
+          [t("sources"), details.source_count],
+          [t("searchError"), details.error],
+        ]),
+        `<div class="preview-list">${(details.chapters || [])
+          .map(
+            (chapter) => `<article>
+              <strong>${escapeHtml([chapter.id, chapter.title].filter(Boolean).join(". "))}</strong>
+              <p class="item-meta">${escapeHtml(t("query"))}: ${escapeHtml(chapter.query || "-")}</p>
+              ${chapter.error ? `<p class="item-meta">${escapeHtml(t("searchError"))}: ${escapeHtml(chapter.error)}</p>` : ""}
+              ${renderSourceLinks(chapter.sources)}
+            </article>`,
+          )
+          .join("")}</div>`,
+      ].join("");
     case "section_writing":
       return [
-        renderKeyValueList([[t("sectionDrafts"), details.section_draft_count]]),
+        renderKeyValueList([
+          [t("sectionDrafts"), details.section_draft_count],
+          [t("chapterDigests"), details.chapter_digest_count],
+          [t("glossary"), (details.glossary_terms || []).join(", ")],
+        ]),
         `<div class="preview-list">${(details.section_drafts || [])
           .map(
             (draft) =>
-              `<article><strong>${escapeHtml(draft.title)}</strong><p>${escapeHtml(draft.preview)}</p></article>`,
+              `<article><strong>${escapeHtml(draft.title)}</strong><p>${escapeHtml(draft.preview)}</p>${renderUsedSources(draft.sources)}</article>`,
           )
           .join("")}</div>`,
       ].join("");
@@ -864,6 +994,7 @@ function renderStepDetails(step) {
       return [
         renderKeyValueList([
           [t("mode"), details.merge_mode],
+          [t("smoothedSeams"), details.smoothed_seams],
           [t("characters"), details.character_count],
         ]),
         details.draft_preview ? `<pre class="mini-preview">${escapeHtml(details.draft_preview)}</pre>` : "",
@@ -1517,6 +1648,12 @@ els.deleteProjectButton.addEventListener("click", async () => {
 
 els.projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const referenceUrls = els.projectReferenceUrls.value
+    .split("\n")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  const referenceFiles = Array.from(els.projectReferenceFiles.files || []);
+
   try {
     const project = await api("/projects", {
       method: "POST",
@@ -1526,9 +1663,38 @@ els.projectForm.addEventListener("submit", async (event) => {
       }),
     });
     state.selectedProjectId = project.id;
+
+    const referenceErrors = [];
+    if (referenceUrls.length) {
+      try {
+        await api(`/projects/${project.id}/references/urls`, {
+          method: "POST",
+          body: JSON.stringify({ urls: referenceUrls }),
+        });
+      } catch (error) {
+        referenceErrors.push(error.message);
+      }
+    }
+    if (referenceFiles.length) {
+      const formData = new FormData();
+      for (const file of referenceFiles) formData.append("files", file);
+      try {
+        await api(`/projects/${project.id}/references/files`, {
+          method: "POST",
+          body: formData,
+        });
+      } catch (error) {
+        referenceErrors.push(error.message);
+      }
+    }
+
     els.projectForm.reset();
     els.projectForm.classList.add("hidden");
-    showToast(t("projectCreated"));
+    if (referenceErrors.length) {
+      showToast(t("referencesFailed", { errors: referenceErrors.join(" / ") }), true);
+    } else {
+      showToast(t("projectCreated"));
+    }
     await loadProjects();
   } catch (error) {
     showToast(error.message, true);

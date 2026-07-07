@@ -1,4 +1,8 @@
-from app.services.citations import format_sources_section, renumber_citations
+from app.services.citations import (
+    format_sources_section,
+    global_citation_numbers,
+    renumber_citations,
+)
 
 SOURCE_A = {"title": "Alpha", "url": "https://a.example.com"}
 SOURCE_B = {"title": "Beta", "url": "https://b.example.com"}
@@ -78,3 +82,16 @@ class TestFormatSourcesSection:
     def test_empty_sources_render_nothing(self):
         assert format_sources_section([]) == ""
         assert format_sources_section([{"title": "no url"}]) == ""
+
+
+class TestGlobalCitationNumbers:
+    def test_collects_link_numbers(self):
+        text = "Claim [[1]](https://a.example.com) and [[12]](https://b.example.com)."
+        assert global_citation_numbers(text) == {"1", "12"}
+
+    def test_ignores_plain_markers_and_links(self):
+        assert global_citation_numbers("Bare [1] and [link](https://x.example.com).") == set()
+
+    def test_empty(self):
+        assert global_citation_numbers("") == set()
+        assert global_citation_numbers(None) == set()

@@ -216,6 +216,45 @@ class TestSearchWeb:
         assert result["error"] is not None
 
 
+class TestPlanChapterQueries:
+    CHAPTERS = [
+        {"id": "1", "title": "서론: AI 도입 배경"},
+        {"id": "2", "title": "본론: 아키텍처"},
+    ]
+
+    def test_llm_disabled_uses_fallback(self, monkeypatch):
+        monkeypatch.setattr(search, "settings", fake_settings(llm_enabled=False))
+        queries, source = search._plan_chapter_queries(make_project(), self.CHAPTERS)
+        assert source == "fallback"
+        assert queries == ["AI 도입 배경", "아키텍처"]
+
+    def test_partial_llm_failure_falls_back_per_chapter(self, monkeypatch):
+        from app.services import llm
+
+        monkeypatch.setattr(search, "settings", fake_settings(llm_enabled=True))
+
+        def fake_plan(project, chapter):
+            if chapter["id"] == "1":
+                return "ai adoption trends", None
+            raise llm.LLMError("bad json")
+
+        monkeypatch.setattr(llm, "plan_chapter_query", fake_plan)
+        queries, source = search._plan_chapter_queries(make_project(), self.CHAPTERS)
+        assert source == "mixed"
+        assert queries == ["ai adoption trends", "아키텍처"]
+
+    def test_all_llm_success(self, monkeypatch):
+        from app.services import llm
+
+        monkeypatch.setattr(search, "settings", fake_settings(llm_enabled=True))
+        monkeypatch.setattr(
+            llm, "plan_chapter_query", lambda project, chapter: (f"q{chapter['id']}", None)
+        )
+        queries, source = search._plan_chapter_queries(make_project(), self.CHAPTERS)
+        assert source == "llm"
+        assert queries == ["q1", "q2"]
+
+
 class TestResearchChapters:
     def test_disabled_returns_empty(self, monkeypatch):
         monkeypatch.setattr(search, "settings", fake_settings(search_enabled=False))

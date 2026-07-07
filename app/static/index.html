@@ -65,6 +65,14 @@
               <span data-i18n="initialRequest">Initial request</span>
               <textarea id="projectRequest" name="initial_request" required rows="4"></textarea>
             </label>
+            <label>
+              <span data-i18n="referenceUrls">Reference URLs (one per line)</span>
+              <textarea id="projectReferenceUrls" rows="2" placeholder="https://"></textarea>
+            </label>
+            <label>
+              <span data-i18n="referenceFiles">Attachments (.txt, .md)</span>
+              <input id="projectReferenceFiles" type="file" multiple accept=".txt,.md,.markdown" />
+            </label>
             <button type="submit" data-i18n="createProject">Create Project</button>
           </form>
 
@@ -89,6 +97,18 @@
                 <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
                 <button id="deleteProjectButton" type="button" class="danger" data-i18n="delete">Delete</button>
               </div>
+            </section>
+
+            <section class="request-panel" aria-label="Initial request">
+              <details id="requestDetails">
+                <summary>
+                  <span class="eyebrow" data-i18n="initialRequest">Initial request</span>
+                  <span id="requestSummaryPreview" class="request-summary-preview"></span>
+                </summary>
+                <p id="detailRequest" class="request-text"></p>
+                <h4 class="references-title" data-i18n="references">References</h4>
+                <div id="referenceList" class="reference-list"></div>
+              </details>
             </section>
 
             <section id="nextAction" class="next-action" aria-live="polite">

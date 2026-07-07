@@ -129,19 +129,28 @@ artifacts such as `research_sources`, `source_summaries`, `brief`, `outline`,
 `continuity_review`, `targeted_revision`, and the final merged `draft`.
 Search results are passed into the LLM prompts.
 
-By default, `final_merge` does not call the LLM. It concatenates the section
-drafts in order and appends a `Sources` section. Because each section is
-written against its own small source list, the merge step remaps every inline
-`[1]`-style marker onto one global source numbering, deduplicated by URL, and
-turns each marker into a clickable link (`[[3]](https://...)`). The `Sources`
-section lists only the sources actually cited, with numbers that match the
-inline citations. This avoids sending the full document back through the model. Set
-`LLM_MERGE_ENABLED=true` only when you want the model to rewrite transitions
-and polish the whole document during final merge.
+`final_merge` always assembles the document deterministically: it concatenates
+the section drafts in order and appends a `Sources` section. Because each
+section is written against its own small source list, the merge step remaps
+every inline `[1]`-style marker onto one global source numbering, deduplicated
+by URL, and turns each marker into a clickable link (`[[3]](https://...)`).
+The `Sources` section lists only the sources actually cited, with numbers that
+match the inline citations. Set `LLM_MERGE_ENABLED=true` to additionally smooth
+chapter transitions: one small LLM call per chapter boundary rewrites the next
+chapter's opening paragraph (never the whole document), and a rewrite that
+drops citations or balloons in length is discarded.
 
 Section writing returns both the section markdown and its handoff summary in a
 single LLM call. The separate `section_summary` stage records those summaries
 without making another model call, which reduces latency and token use.
+
+To keep small models from forgetting earlier content, the writer carries a
+layered memory: each finished chapter is compressed into a short digest (one
+small call per chapter), and every section prompt receives the previous
+chapters' digests, the previous section's handoff summary, and a glossary of
+the most frequent established terms. `continuity_review` runs in two stages
+sized for small models: one call per chapter over its section overviews, plus
+one cross-chapter call over the chapter digests.
 
 Completed pipeline artifacts are reused when they are still fresh. If a project
 already has current `research_sources`, `brief`, `outline`, `section_plan`,

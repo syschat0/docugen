@@ -7,6 +7,7 @@ from typing import Any, Dict
 from app.core.config import settings
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
+from app.services.citations import global_citation_numbers
 
 
 class LLMError(Exception):
@@ -306,6 +307,50 @@ def select_relevant_sources(
     return ranked[:limit]
 
 
+def select_section_sources(
+    section: Dict[str, Any],
+    chapter_candidates: list[Dict[str, Any]],
+    global_candidates: list[Dict[str, Any]],
+    limit: int = 2,
+) -> list[Dict[str, Any]]:
+    """Pick section sources, preferring the section's own chapter research.
+
+    Chapter research was queried for this chapter specifically, so any
+    chapter source with keyword overlap outranks the global pool; global
+    sources only fill the remaining slots. Without a relevant chapter
+    source this degrades to ranking the combined pool.
+    """
+    section_words = _section_words(section)
+
+    def usable(sources: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        return [s for s in sources if isinstance(s, dict) and s.get("url")]
+
+    def score(source: Dict[str, Any]) -> int:
+        return len(section_words & _source_words(source))
+
+    chapter_ranked = sorted(usable(chapter_candidates), key=score, reverse=True)
+    picked = [source for source in chapter_ranked if score(source) > 0][:limit]
+    seen = {source["url"] for source in picked}
+    if len(picked) < limit:
+        rest = sorted(
+            (
+                source
+                for source in usable(global_candidates) + chapter_ranked
+                if source["url"] not in seen
+            ),
+            key=score,
+            reverse=True,
+        )
+        for source in rest:
+            if source["url"] in seen:
+                continue
+            seen.add(source["url"])
+            picked.append(source)
+            if len(picked) >= limit:
+                break
+    return picked
+
+
 def best_overlap_score(section: Dict[str, Any], sources: list[Dict[str, Any]]) -> int:
     """Largest keyword overlap between the section and any of its sources."""
     section_words = _section_words(section)
@@ -522,41 +567,35 @@ Return this exact JSON shape:
     return queries[:4], usage
 
 
-def plan_chapter_queries(
-    project: ProjectRead, chapters: list[Dict[str, Any]]
-) -> tuple[list[str], dict[str, Any] | None]:
-    chapter_list = [
-        {"id": str(chapter.get("id", "")), "title": str(chapter.get("title", ""))}
-        for chapter in chapters
-    ]
+def plan_chapter_query(
+    project: ProjectRead, chapter: Dict[str, Any]
+) -> tuple[str, dict[str, Any] | None]:
+    """One tiny call per chapter: a failed query only loses that chapter."""
+    chapter_title = str(chapter.get("title", ""))
     parsed, usage = _json_chat(
-        "You create short web search queries for document research. Return only valid JSON.",
+        "You create one short web search query for document research. Return only valid JSON.",
         f"""
 Project topic:
 {project.title}
 
-Chapters:
-{json.dumps(chapter_list, ensure_ascii=False)}
+Chapter title:
+{chapter_title}
 
-For each chapter, in order, create one short web search query (2 to 6 keywords)
-that would find useful reference material for that chapter. Write the queries
-in the same language as the chapter titles. Use searchable keywords, not full
-sentences; do not copy the chapter title verbatim if it reads like a sentence.
+Create one short web search query (2 to 6 keywords) that would find useful
+reference material for this chapter. Write the query in the same language as
+the chapter title. Use searchable keywords, not a full sentence; do not copy
+the chapter title verbatim if it reads like a sentence.
 
-Return this exact JSON shape with exactly {len(chapter_list)} queries in chapter order:
+Return this JSON shape:
 {{
-  "queries": ["", ""]
+  "query": ""
 }}
 """,
     )
-    raw_queries = parsed.get("queries")
-    if not isinstance(raw_queries, list):
-        raise LLMError("LLM chapter query plan missing list field: queries")
-    queries = [" ".join(str(query).split())[:100].strip() for query in raw_queries]
-    queries = [query for query in queries if query]
-    if len(queries) != len(chapter_list):
-        raise LLMError("LLM chapter query plan returned wrong query count")
-    return queries, usage
+    query = " ".join(str(parsed.get("query", "")).split())[:100].strip()
+    if not query:
+        raise LLMError("LLM chapter query response missing query")
+    return query, usage
 
 
 def generate_brief(
@@ -917,11 +956,36 @@ def write_section_with_summary(
     sources: list[Dict[str, Any]],
     section_titles: list[str],
     feedback: list[str] | None = None,
+    chapter_digests: list[Dict[str, Any]] | None = None,
+    glossary: list[str] | None = None,
 ) -> tuple[str, Dict[str, Any], dict[str, Any] | None]:
     style = str(brief.get("style") or brief.get("tone") or "match the initial request")
     target_length = section.get("target_length") or 500
     depth = section.get("depth") or 3
     titles_block = "\n".join(f"- {title}" for title in section_titles) or "- (none)"
+    digest_block = ""
+    if chapter_digests:
+        digest_lines = json.dumps(
+            [
+                {
+                    "chapter_id": str(digest.get("chapter_id", "")),
+                    "title": _clip(digest.get("title"), 80),
+                    "digest": _clip(digest.get("digest"), 300),
+                }
+                for digest in chapter_digests[-6:]
+            ],
+            ensure_ascii=False,
+        )
+        digest_block = f"""
+
+What earlier chapters already established (do not re-explain):
+{digest_lines}"""
+    glossary_block = ""
+    if glossary:
+        glossary_block = f"""
+
+Established terminology (keep using these exact terms):
+{", ".join(_clip(term, 40) for term in glossary[:15])}"""
     feedback_block = ""
     if feedback:
         feedback_lines = "\n".join(f"- {_clip(comment, 400)}" for comment in feedback[:8])
@@ -956,14 +1020,14 @@ Project title:
 Brief summary JSON:
 {json.dumps(_brief_context(brief), ensure_ascii=False)}
 
-All sections of the document (do NOT cover their topics here):
+Other planned document content (do NOT cover these topics here):
 {titles_block}
 
 Current section JSON:
 {json.dumps(section, ensure_ascii=False)}
 
 Previous section summary JSON:
-{json.dumps(_clip_summary(previous_summary), ensure_ascii=False)}
+{json.dumps(_clip_summary(previous_summary), ensure_ascii=False)}{digest_block}{glossary_block}
 
 Relevant sources:
 {_source_context(sources)}{feedback_block}
@@ -1046,6 +1110,61 @@ Return this JSON shape:
     return parsed, usage
 
 
+def summarize_chapter(
+    project: ProjectRead,
+    chapter: Dict[str, Any],
+    section_summaries: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    """Compress one finished chapter's section summaries into a short digest.
+
+    Later chapters receive these digests instead of the full summary chain,
+    so cross-chapter context stays a few hundred characters per chapter.
+    """
+    chapter_id = str(chapter.get("id", ""))
+    chapter_title = str(chapter.get("title", ""))
+    overview = [
+        {
+            "section_id": str(summary.get("section_id", "")),
+            "summary": _clip(summary.get("summary"), 200),
+            "claims": [_clip(claim, 80) for claim in (summary.get("claims") or [])[:3]],
+        }
+        for summary in section_summaries
+    ]
+    parsed, usage = _json_chat(
+        "You compress one finished document chapter into a compact digest that later chapters rely on. Return only valid JSON.",
+        f"""
+Project title:
+{project.title}
+
+Chapter {chapter_id}: {chapter_title}
+
+Section summaries JSON:
+{json.dumps(overview, ensure_ascii=False)}
+
+Summarize what this chapter established in 2-3 sentences, in the same language
+as the summaries. Also list up to 5 key claims and up to 8 key terms the
+chapter introduced.
+
+Return this JSON shape:
+{{
+  "digest": "",
+  "claims": [],
+  "terms": []
+}}
+""",
+    )
+    digest = parsed.get("digest")
+    if not isinstance(digest, str) or not digest.strip():
+        raise LLMError("Chapter digest response missing digest")
+    return {
+        "chapter_id": chapter_id,
+        "title": chapter_title,
+        "digest": _clip(digest, 400),
+        "claims": [_clip(claim, 80) for claim in (parsed.get("claims") or [])[:5]],
+        "terms": [_clip(term, 40) for term in (parsed.get("terms") or [])[:8]],
+    }, usage
+
+
 def _section_draft_key(item: Dict[str, Any]) -> str:
     section = item.get("section") or {}
     section_id = str(section.get("id", "")).strip()
@@ -1075,107 +1194,145 @@ def apply_section_revisions(
     ]
 
 
-def _markdown_from_merge_response(
-    parsed: Dict[str, Any],
-    raw_content: str,
-    section_drafts: list[Dict[str, Any]],
-) -> str:
-    sections = parsed.get("sections")
-    if isinstance(sections, list):
-        parts = [
-            str(item.get("markdown", "")).strip()
-            for item in sections
-            if isinstance(item, dict) and str(item.get("markdown", "")).strip()
-        ]
-        if len(parts) >= len(section_drafts) or (
-            len(parts) > 1 and len(section_drafts) > 1
-        ):
-            return "\n\n".join(parts)
+def _split_opening_paragraph(markdown: str) -> tuple[str, str, str]:
+    """Split a section draft into (heading, opening paragraph, remainder).
 
-    return _markdown_from_parsed_response(parsed, raw_content, "Final merge")
+    Returns an empty opening when the first block after the heading is not a
+    plain text paragraph (list, table, code fence, sub-heading) - those are
+    unsafe to rewrite.
+    """
+    text = markdown.strip()
+    if not text.startswith("#"):
+        return "", "", markdown
+    if "\n" not in text:
+        return text, "", ""
+    heading, rest = text.split("\n", 1)
+    rest = rest.lstrip("\n")
+    opening, _sep, remainder = rest.partition("\n\n")
+    stripped = opening.lstrip()
+    if (
+        not stripped
+        or stripped.startswith(("#", "```", "-", "*", "|", ">"))
+        or re.match(r"^\d+\.\s", stripped)
+    ):
+        return heading, "", rest
+    return heading, opening, remainder
 
 
-def merge_sections(
+def _markdown_tail(markdown: str, limit: int = 400) -> str:
+    """Last plain-text paragraphs of a section, capped at `limit` characters."""
+    paragraphs = [
+        paragraph
+        for paragraph in markdown.strip().split("\n\n")
+        if paragraph.strip() and not paragraph.lstrip().startswith(("```", "|", "#"))
+    ]
+    tail = ""
+    for paragraph in reversed(paragraphs):
+        candidate = f"{paragraph}\n\n{tail}".strip() if tail else paragraph
+        if tail and len(candidate) > limit:
+            break
+        tail = candidate
+        if len(tail) >= limit:
+            break
+    return tail[-limit:]
+
+
+def _smooth_one_transition(
     project: ProjectRead,
     brief: Dict[str, Any],
-    outline: Dict[str, Any],
-    section_drafts: list[Dict[str, Any]],
-    summaries: list[Dict[str, Any]],
-    research: Dict[str, Any] | None,
+    previous_tail: str,
+    heading: str,
+    opening: str,
 ) -> tuple[str, dict[str, Any] | None]:
-    content, usage = _chat_content(
-        [
-            {
-                "role": "system",
-                "content": "You merge section drafts into a polished Markdown document. Prefer valid JSON, but the final body must be usable Markdown.",
-            },
-            {
-                "role": "user",
-                "content": f"""
+    style = str(brief.get("style") or brief.get("tone") or "match the document")
+    parsed, usage = _json_chat(
+        "You rewrite the opening paragraph of a chapter so it flows naturally from the previous chapter. Return only valid JSON.",
+        f"""
 Project title:
 {project.title}
 
-Brief JSON:
-{json.dumps(brief, ensure_ascii=False)}
+End of the previous chapter:
+{previous_tail}
 
-Outline JSON:
-{json.dumps(outline, ensure_ascii=False)}
+Heading of the current chapter's first section (do not change it):
+{heading}
 
-Section drafts JSON:
-{json.dumps(section_drafts, ensure_ascii=False)}
+Current opening paragraph:
+{opening}
 
-Section summaries JSON:
-{json.dumps(summaries, ensure_ascii=False)}
+Rewrite ONLY the opening paragraph so it reads as a natural continuation of
+the previous chapter's ending. Keep the same language, the register "{style}",
+and roughly the same length. Preserve inline citation links such as
+[[1]](https://example.com) exactly. Do not add new facts, headings, or lists.
 
-Search sources:
-{_source_lines(research)}
-
-Merge the sections into one coherent Markdown document. Smooth transitions,
-remove obvious duplication, and keep the same language as the drafts. Preserve
-all outline numbering in headings, such as "## 1 Title" and
-"### 1.2 Section title". Do not remove or renumber heading prefixes. Preserve
-inline citation links such as [[1]](https://example.com) exactly as written;
-do not renumber or unlink them. Keep ```mermaid code blocks unchanged. Add a final "Sources" section listing each
-search source above as "N. [title](url)" using the same numbers as the inline
-citations. Return either:
+Return this JSON shape:
 {{
-  "markdown": "# Title\\n\\nFinal document..."
+  "opening": ""
 }}
-
-or plain Markdown.
-If returning JSON, use the exact key name "markdown" for the final document.
-""".strip(),
-            },
-        ]
+""",
     )
-    try:
-        parsed = _extract_json_object(content)
-    except LLMError:
-        markdown = _strip_fence(content)
-    else:
-        markdown = _markdown_from_merge_response(parsed, content, section_drafts)
-    if not isinstance(markdown, str) or not markdown.strip():
-        raise LLMError("Final merge response missing markdown")
-
-    input_length = sum(
-        len(str(draft.get("markdown", "")).strip()) for draft in section_drafts
-    )
-    if len(section_drafts) > 1 and input_length and len(markdown.strip()) < input_length * 0.5:
-        markdown = "\n\n".join(
-            str(item.get("markdown", "")).strip()
-            for item in section_drafts
-            if str(item.get("markdown", "")).strip()
-        )
-
-    return markdown, usage
+    new_opening = parsed.get("opening")
+    if not isinstance(new_opening, str) or not new_opening.strip():
+        raise LLMError("Seam smoothing response missing opening")
+    return new_opening.strip(), usage
 
 
-def review_continuity(
+def smooth_chapter_seams(
     project: ProjectRead,
     brief: Dict[str, Any],
     section_drafts: list[Dict[str, Any]],
+) -> tuple[list[Dict[str, Any]], dict[str, Any] | None, list[str]]:
+    """Smooth chapter transitions with one small call per boundary.
+
+    Replaces the old whole-document merge call, which packed every draft into
+    a single prompt and routinely overflowed small models. Intra-chapter flow
+    is already handled at write time by the summary handoff; only chapter
+    boundaries get an extra pass. Every seam is best-effort and guarded: a
+    rewrite that drops citations or balloons in length is discarded.
+    """
+    smoothed: list[Dict[str, Any]] = []
+    usages: list[Dict[str, Any]] = []
+    seams: list[str] = []
+    previous_chapter: str | None = None
+    previous_markdown = ""
+    for draft in section_drafts:
+        section = draft.get("section") or {}
+        section_id = str(section.get("id", ""))
+        chapter_id = section_id.split(".")[0]
+        markdown = str(draft.get("markdown", ""))
+        if previous_chapter is not None and chapter_id != previous_chapter:
+            heading, opening, remainder = _split_opening_paragraph(markdown)
+            if heading and opening:
+                try:
+                    new_opening, usage = _smooth_one_transition(
+                        project, brief, _markdown_tail(previous_markdown), heading, opening
+                    )
+                except LLMError:
+                    new_opening, usage = None, None
+                if (
+                    new_opening
+                    and global_citation_numbers(new_opening)
+                    == global_citation_numbers(opening)
+                    and len(new_opening) <= 2 * len(opening) + 200
+                ):
+                    parts = [heading, new_opening]
+                    if remainder.strip():
+                        parts.append(remainder)
+                    markdown = "\n\n".join(parts)
+                    seams.append(section_id)
+                    if usage is not None:
+                        usages.append({"section_id": section_id, **usage})
+        smoothed.append({**draft, "markdown": markdown})
+        previous_chapter = chapter_id
+        previous_markdown = markdown
+    return smoothed, ({"seam_calls": usages} if usages else None), seams
+
+
+
+def _continuity_overview(
+    section_drafts: list[Dict[str, Any]],
     summaries: list[Dict[str, Any]],
-) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+) -> list[Dict[str, Any]]:
     # Full drafts overflow small models (30k+ chars); review from the
     # per-section summaries plus a short opening excerpt instead.
     summary_by_id = {
@@ -1197,20 +1354,29 @@ def review_continuity(
                 "terms": [_clip(term, 40) for term in (summary.get("terms") or [])[:5]],
             }
         )
+    return overview
+
+
+def _review_chapter_continuity(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    chapter_id: str,
+    overview: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     style = str(brief.get("style") or brief.get("tone") or "")
     return _json_chat(
-        "You review a multi-section draft for continuity, repeated ideas, terminology and register consistency. Return only valid JSON.",
+        "You review the sections of one document chapter for continuity, repeated ideas, terminology and register consistency. Return only valid JSON.",
         f"""
 Project title:
 {project.title}
 
 Required writing style/register: {style or "unspecified"}
 
-Section overview (id, title, summary, opening sentence, key terms):
+Chapter {chapter_id} section overview (id, title, summary, opening sentence, key terms):
 {json.dumps(overview, ensure_ascii=False)}
 
 Check for:
-- Topics repeated across sections (name both section ids)
+- Topics repeated across these sections (name both section ids)
 - Inconsistent terminology for the same concept
 - Sections whose opening sentence does not match the required register/style
 - Broken logical flow between adjacent sections
@@ -1226,6 +1392,121 @@ Return this JSON shape:
 }}
 """,
     )
+
+
+def _review_cross_chapter_continuity(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    chapter_digests: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    digests = [
+        {
+            "chapter_id": str(digest.get("chapter_id", "")),
+            "title": _clip(digest.get("title"), 80),
+            "digest": _clip(digest.get("digest"), 300),
+            "terms": [_clip(term, 40) for term in (digest.get("terms") or [])[:8]],
+        }
+        for digest in chapter_digests
+    ]
+    return _json_chat(
+        "You review chapter digests of a document for cross-chapter repetition, terminology drift, and ordering problems. Return only valid JSON.",
+        f"""
+Project title:
+{project.title}
+
+Chapter digests JSON:
+{json.dumps(digests, ensure_ascii=False)}
+
+Check for:
+- The same topic explained in more than one chapter (name both chapter ids)
+- Different terms used for the same concept across chapters
+- Chapters that assume content a later chapter introduces
+
+Return this JSON shape:
+{{
+  "verdict": "pass",
+  "issues": [],
+  "notes": ""
+}}
+""",
+    )
+
+
+def review_continuity_staged(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    section_drafts: list[Dict[str, Any]],
+    summaries: list[Dict[str, Any]],
+    chapter_digests: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    """Two-stage continuity review sized for small models.
+
+    Stage one reviews each chapter's sections in its own call; stage two
+    reviews cross-chapter issues from the chapter digests. A single failed
+    call skips that chapter instead of aborting the review; only a total
+    failure raises.
+    """
+    overview = _continuity_overview(section_drafts, summaries)
+    by_chapter: Dict[str, list[Dict[str, Any]]] = {}
+    for entry in overview:
+        by_chapter.setdefault(str(entry["id"]).split(".")[0], []).append(entry)
+
+    verdict = "pass"
+    issues: list[Any] = []
+    targets: list[str] = []
+    notes: list[str] = []
+    usages: list[Dict[str, Any]] = []
+    attempted = 0
+    succeeded = 0
+
+    for chapter_id, entries in by_chapter.items():
+        if len(entries) < 2:
+            continue
+        attempted += 1
+        try:
+            review, usage = _review_chapter_continuity(project, brief, chapter_id, entries)
+        except LLMError:
+            notes.append(f"Chapter {chapter_id} continuity review failed; skipped.")
+            continue
+        succeeded += 1
+        if usage is not None:
+            usages.append({"chapter_id": chapter_id, **usage})
+        if str(review.get("verdict", "pass")) != "pass":
+            verdict = "needs_revision"
+        issues.extend(review.get("issues") or [])
+        targets.extend(
+            str(target) for target in (review.get("revision_targets") or []) if str(target).strip()
+        )
+        if review.get("notes"):
+            notes.append(f"[{chapter_id}] {review['notes']}")
+
+    if len(chapter_digests) >= 2:
+        attempted += 1
+        try:
+            review, usage = _review_cross_chapter_continuity(project, brief, chapter_digests)
+        except LLMError:
+            notes.append("Cross-chapter continuity review failed; skipped.")
+        else:
+            succeeded += 1
+            if usage is not None:
+                usages.append({"chapter_id": "cross", **usage})
+            if str(review.get("verdict", "pass")) != "pass":
+                verdict = "needs_revision"
+            issues.extend(review.get("issues") or [])
+            if review.get("notes"):
+                notes.append(f"[cross-chapter] {review['notes']}")
+
+    if attempted and not succeeded:
+        raise LLMError("Continuity review failed for every chapter")
+
+    deduped_targets = list(dict.fromkeys(targets))
+    return {
+        "verdict": verdict,
+        "issues": issues,
+        "revision_targets": deduped_targets,
+        "notes": " ".join(notes),
+        "chapter_review_count": succeeded,
+    }, ({"chapter_calls": usages} if usages else None)
 
 
 def _revise_one_section(
@@ -1376,90 +1657,3 @@ def revise_targeted_sections(
         {"section_calls": usages} if usages else None,
     )
 
-
-def generate_document_artifacts(
-    project: ProjectRead, decisions: list[UserDecisionRead]
-) -> tuple[list[tuple[str, str, Dict[str, Any]]], dict[str, Any] | None]:
-    decision_lines = "\n".join(
-        f"- {decision.question}: {decision.answer}" for decision in decisions
-    ) or "- No user answers recorded."
-    system_prompt = (
-        "You are a document generation agent. Return only one valid JSON object. "
-        "Do not wrap the response in markdown. Do not include commentary."
-    )
-    user_prompt = f"""
-Create a first-pass document for this project.
-
-Project title:
-{project.title}
-
-Initial request:
-{project.initial_request}
-
-User answers and decisions to incorporate:
-{decision_lines}
-
-Write in the same language as the user's request unless the user explicitly asks
-for another language. Reflect the user answers directly in the brief, outline,
-and draft.
-
-Return this exact JSON shape:
-{{
-  "brief": {{
-    "topic": "",
-    "goal": "",
-    "audience": "",
-    "tone": "",
-    "format": "markdown document",
-    "success_criteria": []
-  }},
-  "outline": {{
-    "chapters": [
-      {{
-        "id": "1",
-        "title": "",
-        "purpose": "",
-        "expected_sections": []
-      }}
-    ]
-  }},
-  "draft_markdown": "# Title\\n\\nMarkdown body..."
-}}
-"""
-    response = _request_chat_completion(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt.strip()},
-        ]
-    )
-
-    try:
-        content = response["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError("LLM response did not match OpenAI chat completions format") from exc
-
-    parsed = _extract_json_object(content)
-    brief = parsed.get("brief")
-    outline = parsed.get("outline")
-    draft_markdown = parsed.get("draft_markdown")
-
-    if not isinstance(brief, dict):
-        raise LLMError("LLM response missing object field: brief")
-    if not isinstance(outline, dict):
-        raise LLMError("LLM response missing object field: outline")
-    if not isinstance(draft_markdown, str) or not draft_markdown.strip():
-        raise LLMError("LLM response missing text field: draft_markdown")
-
-    artifacts = [
-        ("brief", "LLM brief", brief),
-        ("outline", "LLM outline", outline),
-        (
-            "draft",
-            "LLM draft",
-            {
-                "format": "markdown",
-                "markdown": draft_markdown,
-            },
-        ),
-    ]
-    return artifacts, response.get("usage")

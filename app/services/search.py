@@ -252,15 +252,24 @@ def build_chapter_query(project: ProjectRead, chapter: dict[str, Any]) -> str:
 def _plan_chapter_queries(
     project: ProjectRead, chapters: list[dict[str, Any]]
 ) -> tuple[list[str], str]:
-    if settings.llm_enabled:
-        from app.services.llm import LLMError, plan_chapter_queries
+    """One small LLM call per chapter; a failed call only falls back for that chapter."""
+    if not settings.llm_enabled:
+        return [build_chapter_query(project, chapter) for chapter in chapters], "fallback"
 
+    from app.services.llm import LLMError, plan_chapter_query
+
+    queries: list[str] = []
+    llm_count = 0
+    for chapter in chapters:
         try:
-            queries, _usage = plan_chapter_queries(project, chapters)
-            return queries, "llm"
+            query, _usage = plan_chapter_query(project, chapter)
+            llm_count += 1
         except LLMError:
-            pass
-    return [build_chapter_query(project, chapter) for chapter in chapters], "fallback"
+            query = build_chapter_query(project, chapter)
+        queries.append(query)
+    if llm_count == len(chapters):
+        return queries, "llm"
+    return queries, "mixed" if llm_count else "fallback"
 
 
 def research_chapters(

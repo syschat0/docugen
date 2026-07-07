@@ -8,7 +8,7 @@ from app.db.session import get_connection
 from app.core.config import settings
 from app.schemas.artifacts import ArtifactCreate, ArtifactRead
 from app.schemas.exports import ExportRead
-from app.schemas.projects import ProjectCreate, ProjectRead
+from app.schemas.projects import ProjectCreate, ProjectRead, ProjectReferenceRead
 from app.schemas.questions import (
     PendingQuestionCreate,
     PendingQuestionRead,
@@ -27,14 +27,15 @@ from app.services.llm import (
     generate_outline,
     generate_section_plan,
     best_overlap_score,
-    merge_sections,
     plan_user_questions,
-    review_continuity,
+    review_continuity_staged,
     review_outline,
     review_section_plan,
     revise_section_with_feedback,
     revise_targeted_sections,
-    select_relevant_sources,
+    select_section_sources,
+    smooth_chapter_seams,
+    summarize_chapter,
     write_section_with_summary,
 )
 from app.services.search import (
@@ -164,6 +165,7 @@ def delete_project(project_id: str) -> bool:
             return False
 
         for table in (
+            "project_references",
             "workflow_threads",
             "pending_questions",
             "user_decisions",
@@ -686,6 +688,129 @@ def _insert_artifact(
     return artifact_id
 
 
+_REFERENCE_COLUMNS = (
+    "id, project_id, kind, source, title, content_text, status, error, created_at"
+)
+
+
+def add_project_references(
+    project_id: str, entries: List[Dict[str, str]]
+) -> List[ProjectReferenceRead]:
+    now = utc_now_iso()
+    created: List[ProjectReferenceRead] = []
+    with get_connection() as conn:
+        for entry in entries:
+            reference_id = str(uuid4())
+            conn.execute(
+                f"""
+                INSERT INTO project_references ({_REFERENCE_COLUMNS})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    reference_id,
+                    project_id,
+                    entry["kind"],
+                    entry["source"],
+                    entry.get("title") or None,
+                    entry.get("content_text") or None,
+                    entry.get("status") or "ready",
+                    entry.get("error") or None,
+                    now,
+                ),
+            )
+            created.append(
+                ProjectReferenceRead(
+                    id=reference_id,
+                    project_id=project_id,
+                    kind=entry["kind"],
+                    source=entry["source"],
+                    title=entry.get("title") or None,
+                    content_text=entry.get("content_text") or None,
+                    status=entry.get("status") or "ready",
+                    error=entry.get("error") or None,
+                    created_at=now,
+                )
+            )
+    return created
+
+
+def list_project_references(project_id: str) -> List[ProjectReferenceRead]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_REFERENCE_COLUMNS}
+            FROM project_references
+            WHERE project_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (project_id,),
+        ).fetchall()
+    return [ProjectReferenceRead(**dict(row)) for row in rows]
+
+
+def delete_project_reference(project_id: str, reference_id: str) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM project_references WHERE id = ? AND project_id = ?",
+            (reference_id, project_id),
+        )
+    return cursor.rowcount > 0
+
+
+def _reference_url(reference: ProjectReferenceRead) -> str:
+    if reference.kind == "url":
+        return reference.source
+    return f"file://{reference.source}"
+
+
+def _merge_reference_sources(
+    references: List[ProjectReferenceRead],
+    research: Dict[str, Any],
+    source_summaries: Dict[str, Any],
+) -> None:
+    """Prepend user-provided references to the research source pool.
+
+    User references outrank web search results, so they lead both the result
+    list (brief prompt) and the source summaries (section source selection).
+    """
+    ready = [
+        ref for ref in references
+        if ref.status == "ready" and (ref.content_text or "").strip()
+    ]
+    if not ready:
+        return
+
+    results = [item for item in research.get("results") or [] if isinstance(item, dict)]
+    summaries = [
+        item for item in source_summaries.get("sources") or [] if isinstance(item, dict)
+    ]
+    result_urls = {item.get("url") for item in results}
+    summary_urls = {item.get("url") for item in summaries}
+
+    new_results: List[Dict[str, str]] = []
+    new_summaries: List[Dict[str, str]] = []
+    for reference in ready:
+        url = _reference_url(reference)
+        title = (reference.title or "").strip() or reference.source
+        content = " ".join((reference.content_text or "").split())
+        if url not in result_urls:
+            new_results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "snippet": content[:300],
+                    "query": "user-provided reference",
+                }
+            )
+        if url not in summary_urls:
+            new_summaries.append(
+                {"title": title, "url": url, "summary": content[:1200], "error": ""}
+            )
+
+    research["results"] = new_results + results
+    source_summaries["sources"] = new_summaries + summaries
+
+
 def _insert_pending_question(
     conn,
     project_id: str,
@@ -1076,6 +1201,27 @@ def _list_section_summaries(project_id: str) -> list[Dict[str, Any]]:
     return [_json_loads(row["summary_json"]) or {"section_id": row["node_id"]} for row in rows]
 
 
+def _list_chapter_digests(project_id: str) -> list[Dict[str, Any]]:
+    """Latest chapter digest per chapter, in first-written (chapter) order."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT node_id, summary_json
+            FROM summaries
+            WHERE project_id = ? AND scope = ?
+            ORDER BY created_at ASC
+            """,
+            (project_id, "chapter"),
+        ).fetchall()
+
+    latest_by_chapter: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        digest = _json_loads(row["summary_json"])
+        if digest:
+            latest_by_chapter[row["node_id"]] = digest
+    return list(latest_by_chapter.values())
+
+
 def _reusable_section_drafts(
     project_id: str,
     sections: list[Dict[str, Any]],
@@ -1452,6 +1598,82 @@ def _local_section_summary(section: Dict[str, Any], markdown: str) -> Dict[str, 
     }
 
 
+def _chapter_titles_from_plan(section_plan: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        str(chapter.get("id", "")): str(chapter.get("title", ""))
+        for chapter in section_plan.get("outline_tree") or []
+        if isinstance(chapter, dict)
+    }
+
+
+def _section_title_context(
+    section: Dict[str, Any],
+    sections: list[Dict[str, Any]],
+    chapter_titles: Dict[str, str],
+) -> list[str]:
+    """Sibling sections in full, other chapters compressed to one title each.
+
+    Distant sections rarely collide with this one, and a long "do not cover"
+    list dilutes small-model attention; the hierarchy keeps it short.
+    """
+    section_id = str(section.get("id", ""))
+    chapter_id = section_id.split(".")[0]
+    titles: list[str] = []
+    listed_chapters: set[str] = set()
+    for item in sections:
+        item_id = str(item.get("id", ""))
+        item_chapter = item_id.split(".")[0]
+        if item_chapter == chapter_id:
+            if item_id != section_id:
+                titles.append(f"{item_id} {item.get('title', '')}".strip())
+        elif item_chapter not in listed_chapters:
+            listed_chapters.add(item_chapter)
+            chapter_title = chapter_titles.get(item_chapter, "")
+            titles.append(f"{item_chapter} {chapter_title} (entire chapter)".strip())
+    return titles
+
+
+def _local_chapter_digest(
+    chapter_id: str, chapter_title: str, chapter_summaries: list[Dict[str, Any]]
+) -> Dict[str, Any]:
+    text = " ".join(
+        str(summary.get("summary", "")).strip()
+        for summary in chapter_summaries
+        if str(summary.get("summary", "")).strip()
+    )
+    return {
+        "chapter_id": chapter_id,
+        "title": chapter_title,
+        "digest": text[:400],
+        "claims": [
+            claim
+            for summary in chapter_summaries
+            for claim in (summary.get("claims") or [])
+        ][:5],
+        "terms": [
+            term
+            for summary in chapter_summaries
+            for term in (summary.get("terms") or [])
+        ][:8],
+    }
+
+
+def _build_chapter_digest(
+    project: ProjectRead,
+    chapter_id: str,
+    chapter_title: str,
+    chapter_summaries: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any] | None]:
+    if settings.llm_enabled:
+        try:
+            return summarize_chapter(
+                project, {"id": chapter_id, "title": chapter_title}, chapter_summaries
+            )
+        except LLMError:
+            pass  # the digest is an enhancement; a local concat must not fail the run
+    return _local_chapter_digest(chapter_id, chapter_title, chapter_summaries), None
+
+
 def _local_merge(
     project: ProjectRead,
     section_drafts: list[Dict[str, Any]],
@@ -1526,19 +1748,19 @@ def _sources_for_section(
     research: Dict[str, Any] | None,
 ) -> list[Dict[str, Any]]:
     chapter_id = str(section.get("id", "")).split(".")[0]
-    candidates: list[Dict[str, Any]] = []
+    chapter_candidates: list[Dict[str, Any]] = []
     for chapter in (chapter_sources or {}).get("chapters") or []:
         if isinstance(chapter, dict) and str(chapter.get("chapter_id")) == chapter_id:
-            candidates.extend(chapter.get("sources") or [])
+            chapter_candidates.extend(chapter.get("sources") or [])
     global_summaries = ((research or {}).get("source_summaries") or {}).get("sources") or []
-    candidates.extend(source for source in global_summaries if isinstance(source, dict))
-    if not candidates:
-        candidates = [
+    global_candidates = [source for source in global_summaries if isinstance(source, dict)]
+    if not chapter_candidates and not global_candidates:
+        global_candidates = [
             result
             for result in (research or {}).get("results") or []
             if isinstance(result, dict)
         ]
-    return select_relevant_sources(section, candidates, limit=2)
+    return select_section_sources(section, chapter_candidates, global_candidates, limit=2)
 
 
 def _reexpand_section_plan(
@@ -1829,6 +2051,9 @@ def run_document_generation(
                     "source_count": len(source_summaries.get("sources", [])),
                 },
             )
+        _merge_reference_sources(
+            list_project_references(project_id), research, source_summaries
+        )
         research["source_summaries"] = source_summaries
 
         brief_artifact = _latest_artifact(project_id, "brief")
@@ -2265,12 +2490,43 @@ def run_document_generation(
                 "section_writing",
                 {"section_count": len(sections)},
             )
-            all_section_titles = [
-                f"{item.get('id', '')} {item.get('title', '')}".strip()
-                for item in sections
-            ]
+            chapter_titles = _chapter_titles_from_plan(section_plan)
             topup_info: list[Dict[str, Any]] = []
+            chapter_digests: list[Dict[str, Any]] = []
+            digest_usage: list[Dict[str, Any]] = []
+            glossary_counts: dict[str, int] = {}
+            current_chapter_id: str | None = None
+            chapter_summaries: list[Dict[str, Any]] = []
             for section in sections:
+                section_chapter = str(section.get("id", "")).split(".")[0]
+                if (
+                    current_chapter_id is not None
+                    and section_chapter != current_chapter_id
+                    and chapter_summaries
+                ):
+                    # Chapter boundary: compress the finished chapter into a
+                    # digest so later sections remember it without carrying
+                    # the full summary chain.
+                    digest, usage = _build_chapter_digest(
+                        project,
+                        current_chapter_id,
+                        chapter_titles.get(current_chapter_id, ""),
+                        chapter_summaries,
+                    )
+                    chapter_digests.append(digest)
+                    if usage is not None:
+                        digest_usage.append({"chapter_id": current_chapter_id, **usage})
+                    with get_connection() as conn:
+                        _insert_summary(
+                            conn,
+                            project_id,
+                            current_chapter_id,
+                            "chapter",
+                            digest,
+                            utc_now_iso(),
+                        )
+                    chapter_summaries = []
+                current_chapter_id = section_chapter
                 section_sources = _sources_for_section(section, chapter_sources, research)
                 # Top-up search: when nothing in the research pool matches this
                 # section, one extra targeted search beats writing sourceless.
@@ -2296,6 +2552,12 @@ def run_document_generation(
                 section_feedback = _section_feedback_comments(
                     feedback_decisions, str(section.get("id", ""))
                 )
+                glossary = [
+                    term
+                    for term, _count in sorted(
+                        glossary_counts.items(), key=lambda item: -item[1]
+                    )[:15]
+                ]
                 if settings.llm_enabled:
                     markdown, summary, usage = write_section_with_summary(
                         project,
@@ -2303,8 +2565,10 @@ def run_document_generation(
                         section,
                         previous_summary,
                         section_sources,
-                        all_section_titles,
+                        _section_title_context(section, sections, chapter_titles),
                         feedback=section_feedback,
+                        chapter_digests=chapter_digests,
+                        glossary=glossary,
                     )
                 else:
                     markdown, usage = _local_section_draft(
@@ -2353,15 +2617,51 @@ def run_document_generation(
                 )
                 summaries.append(summary)
                 previous_summary = summary
+                chapter_summaries.append(summary)
+                for term in summary.get("terms") or []:
+                    term_text = str(term).strip()
+                    if term_text:
+                        glossary_counts[term_text] = glossary_counts.get(term_text, 0) + 1
+            if current_chapter_id is not None and chapter_summaries:
+                digest, usage = _build_chapter_digest(
+                    project,
+                    current_chapter_id,
+                    chapter_titles.get(current_chapter_id, ""),
+                    chapter_summaries,
+                )
+                chapter_digests.append(digest)
+                if usage is not None:
+                    digest_usage.append({"chapter_id": current_chapter_id, **usage})
+                with get_connection() as conn:
+                    _insert_summary(
+                        conn,
+                        project_id,
+                        current_chapter_id,
+                        "chapter",
+                        digest,
+                        utc_now_iso(),
+                    )
+            token_usage: Dict[str, Any] = {}
+            if writing_usage:
+                token_usage["section_calls"] = writing_usage
+            if digest_usage:
+                token_usage["digest_calls"] = digest_usage
             _complete_agent_run(
                 run_id,
                 {
                     "section_artifact_ids": artifact_ids[-len(section_drafts) :],
                     "summary_ids": summary_ids,
                     "summary_mode": "combined_with_writing",
+                    "chapter_digest_count": len(chapter_digests),
+                    "glossary_terms": [
+                        term
+                        for term, _count in sorted(
+                            glossary_counts.items(), key=lambda item: -item[1]
+                        )[:15]
+                    ],
                     **({"topup_searches": topup_info} if topup_info else {}),
                 },
-                token_usage={"section_calls": writing_usage} if writing_usage else None,
+                token_usage=token_usage or None,
             )
 
             run_id = _start_agent_run(
@@ -2484,8 +2784,12 @@ def run_document_generation(
                 {"section_count": len(section_drafts)},
             )
             if settings.llm_enabled:
-                continuity, usage = review_continuity(
-                    project, brief, section_drafts, summaries
+                continuity, usage = review_continuity_staged(
+                    project,
+                    brief,
+                    section_drafts,
+                    summaries,
+                    _list_chapter_digests(project_id),
                 )
             else:
                 continuity, usage = {
@@ -2587,7 +2891,9 @@ def run_document_generation(
                 {
                     "section_count": len(section_drafts),
                     "merge_mode": (
-                        "llm" if settings.llm_enabled and settings.llm_merge_enabled else "local"
+                        "llm_seam"
+                        if settings.llm_enabled and settings.llm_merge_enabled
+                        else "local"
                     ),
                 },
             )
@@ -2609,25 +2915,26 @@ def run_document_generation(
                     for draft in section_drafts
                 ]
             )
+            seam_ids: list[str] = []
+            usage = None
+            if settings.llm_enabled and settings.llm_merge_enabled:
+                # Seam smoothing: one small call per chapter boundary instead
+                # of the old whole-document merge call. The document itself is
+                # always assembled deterministically below, so headings,
+                # citations, and the Sources section can never be lost.
+                renumbered_drafts, usage, seam_ids = smooth_chapter_seams(
+                    project, brief, renumbered_drafts
+                )
+                merge_mode = "llm_seam"
+            else:
+                merge_mode = "local"
             merge_inputs = [
                 {"section": draft["section"], "markdown": draft["markdown"]}
                 for draft in renumbered_drafts
             ]
-            if settings.llm_enabled and settings.llm_merge_enabled:
-                final_markdown, usage = merge_sections(
-                    project,
-                    brief,
-                    outline,
-                    merge_inputs,
-                    summaries,
-                    {"results": used_sources} if used_sources else research,
-                )
-                merge_mode = "llm"
-            else:
-                final_markdown, usage = _local_merge(
-                    project, merge_inputs, research, section_plan, used_sources
-                ), None
-                merge_mode = "local"
+            final_markdown = _local_merge(
+                project, merge_inputs, research, section_plan, used_sources
+            )
             final_content = {"format": "markdown", "markdown": final_markdown}
             with get_connection() as conn:
                 artifact_ids.append(
@@ -2643,7 +2950,11 @@ def run_document_generation(
                 )
             _complete_agent_run(
                 run_id,
-                {"artifact_id": artifact_ids[-1], "merge_mode": merge_mode},
+                {
+                    "artifact_id": artifact_ids[-1],
+                    "merge_mode": merge_mode,
+                    "smoothed_seams": seam_ids,
+                },
                 token_usage=usage,
             )
 
@@ -2776,6 +3087,12 @@ def _workflow_step_details(
         content = chapter_sources.get("content") or {}
         chapters = content.get("chapters") or []
         details["chapter_count"] = len(chapters)
+        details["source_count"] = sum(
+            len(chapter.get("sources") or [])
+            for chapter in chapters
+            if isinstance(chapter, dict)
+        )
+        details["error"] = content.get("error")
         details["chapters"] = [
             {
                 "id": chapter.get("chapter_id"),
@@ -2783,23 +3100,60 @@ def _workflow_step_details(
                 "query": chapter.get("query"),
                 "source_count": len(chapter.get("sources") or []),
                 "error": chapter.get("error"),
+                "sources": [
+                    {
+                        "title": source.get("title"),
+                        "url": source.get("url"),
+                        "summary": _short_text(
+                            source.get("summary") or source.get("snippet") or "", 200
+                        ),
+                    }
+                    for source in (chapter.get("sources") or [])[:5]
+                    if isinstance(source, dict)
+                ],
             }
             for chapter in chapters
             if isinstance(chapter, dict)
         ]
     elif phase == "section_writing":
+        chapter_content = (
+            (artifacts_by_type.get("chapter_sources") or [{}])[-1].get("content") or {}
+        )
+        chapter_urls = {
+            source.get("url")
+            for chapter in chapter_content.get("chapters") or []
+            if isinstance(chapter, dict)
+            for source in chapter.get("sources") or []
+            if isinstance(source, dict) and source.get("url")
+        }
         drafts = artifacts_by_type.get("section_draft") or []
         details["section_draft_count"] = len(drafts)
         details["section_drafts"] = [
             {
                 "title": draft.get("title"),
                 "preview": _short_text((draft.get("content") or {}).get("markdown", ""), 220),
+                "sources": [
+                    {
+                        "title": source.get("title"),
+                        "url": source.get("url"),
+                        "from_chapter_research": source.get("url") in chapter_urls,
+                    }
+                    for source in (draft.get("content") or {}).get("sources") or []
+                    if isinstance(source, dict) and source.get("url")
+                ],
             }
             for draft in drafts[:8]
         ]
+        if output.get("topup_searches"):
+            details["topup_searches"] = output["topup_searches"]
+        if output.get("chapter_digest_count") is not None:
+            details["chapter_digest_count"] = output["chapter_digest_count"]
+        if output.get("glossary_terms"):
+            details["glossary_terms"] = output["glossary_terms"]
     elif phase == "section_summary":
+        section_rows = [row for row in summaries if row.get("scope") == "section"]
         parsed_summaries = []
-        for summary in summaries[:8]:
+        for summary in section_rows[:8]:
             content = _json_loads(summary.get("summary_json")) or {}
             parsed_summaries.append(
                 {
@@ -2807,7 +3161,7 @@ def _workflow_step_details(
                     "summary": _short_text(content.get("summary", ""), 220),
                 }
             )
-        details["summary_count"] = len(summaries)
+        details["summary_count"] = len(section_rows)
         details["summaries"] = parsed_summaries
         if output.get("summary_mode"):
             details["summary_mode"] = output["summary_mode"]
@@ -2820,6 +3174,8 @@ def _workflow_step_details(
         markdown = draft.get("markdown", "")
         if output.get("merge_mode"):
             details["merge_mode"] = output["merge_mode"]
+        if output.get("smoothed_seams"):
+            details["smoothed_seams"] = len(output["smoothed_seams"])
         if markdown:
             details["draft_preview"] = _short_text(markdown, 500)
             details["character_count"] = len(markdown)
