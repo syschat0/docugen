@@ -190,12 +190,16 @@ project in the settings panel (or globally via `CITATION_STYLE`):
   Multiple sources from the same site are disambiguated as `n.d.-a`,
   `n.d.-b`, ... in title order.
 
-Sources are web pages, so the site name stands in for the author and the
-research fetch date is shown as the access date. User-uploaded file
-references are listed without a link as `(user-provided reference)`.
-Because both styles are rendered deterministically in `final_merge`,
-changing the style keeps every cached artifact and only re-merges the
-document on the next run.
+When a fetched page declares an author, publication date, or site name
+(meta tags or schema.org JSON-LD), citations upgrade automatically:
+`(홍길동, 2024)` instead of `(example.com, n.d.)`, with `2024a`/`2024b`
+disambiguation for same-author-same-year sources. Extraction is
+deterministic (`app/services/page_meta.py`) — no model calls — and pages
+without metadata fall back to the site name and the access date recorded
+when the research fetch ran. User-uploaded file references are listed
+without a link as `(user-provided reference)`. Because both styles are
+rendered deterministically in `final_merge`, changing the style keeps
+every cached artifact and only re-merges the document on the next run.
 
 ## Section Feedback
 

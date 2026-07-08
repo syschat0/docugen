@@ -14,6 +14,7 @@ import time
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 from app.core.config import settings
+from app.services.page_meta import interpret_page_meta
 
 
 class BrowserSearchError(Exception):
@@ -61,10 +62,25 @@ _EXTRACT_DAUM_JS = """
 """
 
 _EXTRACT_PAGE_TEXT_JS = """
-() => ({
-  title: document.title || "",
-  text: document.body ? document.body.innerText : "",
-})
+() => {
+  const meta = {};
+  for (const el of document.querySelectorAll("meta[name][content], meta[property][content]")) {
+    const key = (el.getAttribute("name") || el.getAttribute("property") || "").trim().toLowerCase();
+    if (key && !(key in meta)) meta[key] = (el.getAttribute("content") || "").trim();
+  }
+  const ld = [];
+  for (const el of document.querySelectorAll('script[type="application/ld+json"]')) {
+    if (ld.length >= 5) break;
+    const body = (el.textContent || "").trim();
+    if (body) ld.push(body);
+  }
+  return {
+    title: document.title || "",
+    text: document.body ? document.body.innerText : "",
+    meta,
+    ld_json: ld,
+  };
+}
 """
 
 
@@ -365,6 +381,12 @@ def fetch_page_texts(urls: list[str]) -> list[dict[str, str]]:
                     extracted = page.evaluate(_EXTRACT_PAGE_TEXT_JS)
                     entry["title"] = (extracted.get("title") or "").strip()
                     entry["text"] = _clean_page_text(extracted.get("text") or "")
+                    entry.update(
+                        interpret_page_meta(
+                            extracted.get("meta") or {},
+                            extracted.get("ld_json") or [],
+                        )
+                    )
                 except Exception as exc:
                     entry["error"] = f"{type(exc).__name__}: {exc}"
                 pages.append(entry)

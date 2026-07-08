@@ -26,12 +26,36 @@ def _site_name(url: str) -> str:
 
 
 def _author_label(source: Dict[str, Any]) -> str:
-    """Author stand-in for a web source (site name) or a user file (title)."""
+    """Author for citation labels: page author, else site name, else domain.
+
+    author / site_name come from page metadata extracted at fetch time
+    (services/page_meta.py); user files fall back to their title.
+    """
     url = str(source.get("url", ""))
     if _is_file_reference(url):
         title = str(source.get("title") or "").strip()
         return (title or url[len(_FILE_REFERENCE_PREFIX) :])[:60]
+    author = " ".join(str(source.get("author") or "").split())
+    if author:
+        return author[:60]
+    site = " ".join(str(source.get("site_name") or "").split())
+    if site:
+        return site[:60]
     return _site_name(url) or str(source.get("title") or "Source")[:60]
+
+
+_YEAR_LABEL_PATTERN = re.compile(r"(19|20)\d{2}")
+
+
+def _date_label(source: Dict[str, Any]) -> str:
+    """Publication year from page metadata, or the APA no-date marker."""
+    year = str(source.get("published_year") or "").strip()
+    return year if _YEAR_LABEL_PATTERN.fullmatch(year) else "n.d."
+
+
+def _display_site(source: Dict[str, Any]) -> str:
+    site = " ".join(str(source.get("site_name") or "").split())
+    return site[:60] if site else _site_name(str(source.get("url", "")))
 
 
 def renumber_citations(
@@ -92,22 +116,26 @@ def _assign_author_date_labels(
 ) -> dict[str, tuple[str, str]]:
     """Map each source URL to its (author, date) citation label parts.
 
-    Sources are web pages without a reliable publication date, so the date is
-    always "n.d.". When the same author (site) has several sources, APA
-    disambiguates as n.d.-a, n.d.-b, ... in reference-list (title) order.
+    The date is the page's publication year when metadata provided one,
+    otherwise "n.d.". When the same author shares a date, APA disambiguates
+    in reference-list (title) order: 2024a, 2024b for years, n.d.-a, n.d.-b
+    for undated sources.
     """
-    by_author: dict[str, list[Dict[str, Any]]] = {}
+    by_key: dict[tuple[str, str], list[Dict[str, Any]]] = {}
     for source in sources:
-        by_author.setdefault(_author_label(source), []).append(source)
+        key = (_author_label(source), _date_label(source))
+        by_key.setdefault(key, []).append(source)
 
     labels: dict[str, tuple[str, str]] = {}
-    for author, group in by_author.items():
+    for (author, date), group in by_key.items():
         if len(group) == 1:
-            labels[str(group[0]["url"])] = (author, "n.d.")
+            labels[str(group[0]["url"])] = (author, date)
             continue
         ordered = sorted(group, key=lambda item: str(item.get("title") or "").lower())
         for index, source in enumerate(ordered):
-            labels[str(source["url"])] = (author, f"n.d.-{_nd_suffix(index)}")
+            suffix = _nd_suffix(index)
+            dated = f"{date}-{suffix}" if date == "n.d." else f"{date}{suffix}"
+            labels[str(source["url"])] = (author, dated)
     return labels
 
 
@@ -217,8 +245,11 @@ def _numeric_source_lines(
         if _is_file_reference(url):
             lines.append(f"{index}. {title} (user-provided reference)")
             continue
-        site = _site_name(url)
-        tail = f" {site}{_accessed_note(accessed_at)}".rstrip()
+        year = _date_label(source)
+        descriptor = ", ".join(
+            part for part in (_display_site(source), year if year != "n.d." else "") if part
+        )
+        tail = f" {descriptor}{_accessed_note(accessed_at)}".rstrip()
         suffix = f".{tail}" if tail else ""
         lines.append(f"{index}. [{title}]({url}){suffix}")
     return lines
@@ -239,21 +270,31 @@ def _author_date_source_lines(
             return str(author), str(source.get("citation_date") or "n.d.")
         return computed[str(source["url"])]
 
-    entries = sorted(
-        sources,
-        key=lambda s: (label(s)[0].lower(), label(s)[1], str(s.get("title") or "").lower()),
-    )
+    def sort_key(source: Dict[str, Any]) -> tuple:
+        author, date = label(source)
+        # APA orders an author's undated works before dated ones.
+        return (
+            author.lower(),
+            0 if date.startswith("n.d.") else 1,
+            date,
+            str(source.get("title") or "").lower(),
+        )
+
     lines = []
-    for source in entries:
+    for source in sorted(sources, key=sort_key):
         author, date = label(source)
         title = source.get("title") or "Source"
         url = str(source["url"])
         if _is_file_reference(url):
             lines.append(f"- {author}. ({date}). (user-provided reference)")
-        else:
-            lines.append(
-                f"- {author}. ({date}). [{title}]({url}){_accessed_note(accessed_at)}"
-            )
+            continue
+        entry = f"- {author}. ({date}). [{title}]({url})"
+        # APA web citations name the site after the title unless the author
+        # already is the site.
+        site = _display_site(source)
+        if site and site.lower() != author.lower():
+            entry += f". {site}"
+        lines.append(entry + _accessed_note(accessed_at))
     return lines
 
 

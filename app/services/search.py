@@ -8,6 +8,10 @@ import urllib.request
 from app.core.config import settings
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
+from app.services.page_meta import extract_page_meta
+
+# Citation metadata fields copied from fetched pages onto source dicts.
+_PAGE_META_FIELDS = ("author", "published_year", "site_name")
 
 
 class _DuckDuckGoHTMLParser(HTMLParser):
@@ -351,14 +355,16 @@ def research_chapters(
             # Very short page text is usually an error page or a paywall;
             # the search snippet is more informative then.
             summary = text[:600] if len(text) >= 200 else (result.get("snippet") or text)
-            entry["sources"].append(
-                {
-                    "title": page.get("title") or result.get("title", ""),
-                    "url": url,
-                    "snippet": result.get("snippet", ""),
-                    "summary": summary,
-                }
+            source = {
+                "title": page.get("title") or result.get("title", ""),
+                "url": url,
+                "snippet": result.get("snippet", ""),
+                "summary": summary,
+            }
+            source.update(
+                {field: page[field] for field in _PAGE_META_FIELDS if page.get(field)}
             )
+            entry["sources"].append(source)
 
     return {"enabled": True, "query_source": query_source, "chapters": entries}
 
@@ -430,14 +436,16 @@ def _summaries_via_browser(results: list[dict[str, Any]]) -> list[dict[str, str]
     summaries: list[dict[str, str]] = []
     for result, page in zip(entries, pages):
         text = page.get("text", "")
-        summaries.append(
-            {
-                "title": page.get("title") or result.get("title", ""),
-                "url": result["url"],
-                "summary": text[:1200] or result.get("snippet", ""),
-                "error": page.get("error", ""),
-            }
+        summary = {
+            "title": page.get("title") or result.get("title", ""),
+            "url": result["url"],
+            "summary": text[:1200] or result.get("snippet", ""),
+            "error": page.get("error", ""),
+        }
+        summary.update(
+            {field: page[field] for field in _PAGE_META_FIELDS if page.get(field)}
         )
+        summaries.append(summary)
     return summaries
 
 
@@ -479,6 +487,7 @@ def summarize_search_sources(research: dict[str, Any]) -> dict[str, Any]:
                     text = " ".join(parser.text_parts)
                     summary["title"] = parser.title or summary["title"]
                     summary["summary"] = text[:1200] or summary["summary"]
+                    summary.update(extract_page_meta(html))
         except Exception as exc:
             summary["error"] = str(exc)
         summaries.append(summary)

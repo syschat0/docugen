@@ -135,6 +135,64 @@ class TestAuthorDateCitations:
         assert rewritten[0]["markdown"] == "See [(My Notes, n.d.)](file://notes.txt)."
         assert used[0]["citation_author"] == "My Notes"
 
+    def test_page_metadata_upgrades_labels(self):
+        source = {
+            "title": "Deep Dive",
+            "url": "https://news.example.com/a",
+            "author": "홍길동",
+            "published_year": "2024",
+            "site_name": "예제 뉴스",
+        }
+        drafts = [{"markdown": "See [1].", "sources": [source]}]
+        rewritten, used = author_date_citations(drafts)
+        assert rewritten[0]["markdown"] == (
+            "See [(홍길동, 2024)](https://news.example.com/a)."
+        )
+        assert used[0]["citation_author"] == "홍길동"
+        assert used[0]["citation_date"] == "2024"
+
+    def test_same_author_same_year_gets_letter_suffix(self):
+        one = {
+            "title": "B article",
+            "url": "https://n.example.com/1",
+            "author": "Kim",
+            "published_year": "2024",
+        }
+        two = {
+            "title": "A article",
+            "url": "https://n.example.com/2",
+            "author": "Kim",
+            "published_year": "2024",
+        }
+        drafts = [{"markdown": "See [1] and [2].", "sources": [one, two]}]
+        rewritten, used = author_date_citations(drafts)
+        # Title order assigns suffixes: "A article" -> 2024a.
+        assert rewritten[0]["markdown"] == (
+            "See [(Kim, 2024b)](https://n.example.com/1) "
+            "and [(Kim, 2024a)](https://n.example.com/2)."
+        )
+        by_url = {s["url"]: s for s in used}
+        assert by_url["https://n.example.com/2"]["citation_date"] == "2024a"
+
+    def test_site_name_used_when_no_author(self):
+        source = {
+            "title": "T",
+            "url": "https://blog.example.com/x",
+            "site_name": "예제 블로그",
+        }
+        drafts = [{"markdown": "See [1].", "sources": [source]}]
+        rewritten, _ = author_date_citations(drafts)
+        assert rewritten[0]["markdown"] == (
+            "See [(예제 블로그, n.d.)](https://blog.example.com/x)."
+        )
+
+    def test_invalid_year_falls_back_to_nd(self):
+        source = {"title": "T", "url": "https://x.example.com", "published_year": "someday"}
+        rewritten, _ = author_date_citations(
+            [{"markdown": "See [1].", "sources": [source]}]
+        )
+        assert "n.d." in rewritten[0]["markdown"]
+
 
 class TestRenderCitations:
     def test_dispatches_by_style(self):
@@ -192,6 +250,48 @@ class TestFormatSourcesSection:
         section = format_sources_section([FILE_SOURCE], style="author_date")
         assert "- My Notes. (n.d.). (user-provided reference)" in section
         assert "file://" not in section
+
+    def test_author_date_entry_names_site_after_title(self):
+        source = {
+            "title": "Deep Dive",
+            "url": "https://news.example.com/a",
+            "author": "홍길동",
+            "published_year": "2024",
+            "site_name": "예제 뉴스",
+        }
+        section = format_sources_section([source], style="author_date")
+        assert "- 홍길동. (2024). [Deep Dive](https://news.example.com/a). 예제 뉴스" in section
+
+    def test_author_date_omits_site_when_author_is_site(self):
+        source = {"title": "T", "url": "https://example.com/x", "site_name": "example.com"}
+        section = format_sources_section([source], style="author_date")
+        assert "- example.com. (n.d.). [T](https://example.com/x)\n" in section + "\n"
+
+    def test_author_date_orders_undated_before_dated(self):
+        dated = {
+            "title": "Dated",
+            "url": "https://example.com/dated",
+            "author": "Kim",
+            "published_year": "2020",
+        }
+        undated = {"title": "Undated", "url": "https://example.com/undated", "author": "Kim"}
+        section = format_sources_section([dated, undated], style="author_date")
+        assert section.index("(n.d.)") < section.index("(2020)")
+
+    def test_numeric_appends_publication_year(self):
+        source = {
+            "title": "Deep Dive",
+            "url": "https://news.example.com/a",
+            "published_year": "2024",
+            "site_name": "예제 뉴스",
+        }
+        section = format_sources_section(
+            [source], accessed_at="2026-07-08T12:00:00+00:00"
+        )
+        assert (
+            "1. [Deep Dive](https://news.example.com/a). 예제 뉴스, 2024 (accessed 2026-07-08)"
+            in section
+        )
 
     def test_empty_sources_render_nothing(self):
         assert format_sources_section([]) == ""

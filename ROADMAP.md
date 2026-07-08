@@ -24,8 +24,10 @@
       — `app/static/index.html`, `app/static/app.js` (기존 프로젝트 설정 패널)
 - [x] 1-7. 테스트: 두 스타일 렌더링, n.d. 접미사 규칙, file 참조, 이음새 가드
       — `tests/test_citations.py` 확장
-- [ ] 1-8. (선택 후속) 메타태그·JSON-LD 파싱으로 저자/게시일 있는 소스 승격
-      — `(사이트명, n.d.)` → `(저자, 연도)`. `search.py`의 fetch 경로에 파서 추가
+- [x] 1-8. (선택 후속) 메타태그·JSON-LD 파싱으로 저자/게시일 있는 소스 승격
+      — `(사이트명, n.d.)` → `(저자, 연도)`. `app/services/page_meta.py` 신설,
+      browser/HTTP/챕터 리서치 fetch 경로 연결 (사용자 URL 참조는 DB 스키마
+      변경이 필요해 제외 — 도메인 폴백 유지)
 
 ## M2. 문서 유형(장르) 기반 마련 — 유형 다양화의 토대
 
