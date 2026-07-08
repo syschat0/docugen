@@ -200,6 +200,17 @@ guidance and rendering/search defaults - the pipeline stages are the same
 for every type - so changing the type invalidates cached artifacts the
 same way editing the request does.
 
+## Document Length
+
+Set a total body-length budget (characters) in the project settings panel,
+or just state it in the request ("3000자 내외로") - the brief stage extracts
+stated lengths into `target_length_chars`. An explicit setting wins over
+the extracted value. The budget flows into outline and chapter-expansion
+prompts (so structure size fits it) and is distributed proportionally
+across planned sections at run time, clamped to 150-3000 characters per
+section. Stored plan artifacts keep the model's original lengths, so
+changing the budget re-flows sections without rewriting the plan.
+
 ## Citation Styles
 
 The merged draft renders citations in one of two styles, selectable per

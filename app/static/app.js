@@ -114,6 +114,8 @@ const translations = {
     docType: "Document type",
     autoDetect: "Auto detect",
     docTypeSaved: "Document type saved. The next run will rewrite the document.",
+    targetLength: "Target length (characters)",
+    targetLengthAuto: "Auto (from the request)",
     citationStyle: "Citation style",
     citationNumeric: "Numbered [1]",
     citationAuthorDate: "Author-date (APA)",
@@ -296,6 +298,8 @@ const translations = {
     docType: "문서 유형",
     autoDetect: "자동 감지",
     docTypeSaved: "문서 유형을 저장했습니다. 다음 실행 시 문서를 새로 작성합니다.",
+    targetLength: "목표 분량(자)",
+    targetLengthAuto: "자동 (요청문에서 추출)",
     citationStyle: "참고문헌 표기법",
     citationNumeric: "번호식 [1]",
     citationAuthorDate: "저자-연도식 (APA)",
@@ -457,6 +461,7 @@ const els = {
   searchEnabledSelect: document.querySelector("#searchEnabledSelect"),
   sectionSearchSelect: document.querySelector("#sectionSearchSelect"),
   citationStyleSelect: document.querySelector("#citationStyleSelect"),
+  targetLengthInput: document.querySelector("#targetLengthInput"),
   projectDocType: document.querySelector("#projectDocType"),
   docTypeSelect: document.querySelector("#docTypeSelect"),
   referenceList: document.querySelector("#referenceList"),
@@ -1022,16 +1027,24 @@ function renderProjectSettings() {
   if (els.citationStyleSelect) {
     els.citationStyleSelect.value = config.citation_style || "default";
   }
+  if (els.targetLengthInput) {
+    els.targetLengthInput.value = config.target_length ?? "";
+    els.targetLengthInput.placeholder = t("targetLengthAuto");
+  }
 }
 
 async function saveProjectSettings() {
   const project = selectedProject();
   if (!project) return;
   const citationStyle = els.citationStyleSelect?.value;
+  const targetLengthRaw = parseInt(els.targetLengthInput?.value, 10);
   const payload = {
     search_enabled: selectValueToSetting(els.searchEnabledSelect.value),
     section_search_enabled: selectValueToSetting(els.sectionSearchSelect.value),
     citation_style: citationStyle === "default" ? null : citationStyle || null,
+    target_length: Number.isFinite(targetLengthRaw) && targetLengthRaw > 0
+      ? Math.min(Math.max(targetLengthRaw, 100), 200000)
+      : null,
   };
   try {
     state.projectSettings = await api(`/projects/${project.id}/settings`, {
@@ -2228,6 +2241,7 @@ els.addReferenceFilesButton?.addEventListener("click", async () => {
 els.searchEnabledSelect?.addEventListener("change", saveProjectSettings);
 els.sectionSearchSelect?.addEventListener("change", saveProjectSettings);
 els.citationStyleSelect?.addEventListener("change", saveProjectSettings);
+els.targetLengthInput?.addEventListener("change", saveProjectSettings);
 els.docTypeSelect?.addEventListener("change", saveDocType);
 
 els.projectForm.addEventListener("submit", async (event) => {

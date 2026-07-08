@@ -83,6 +83,7 @@ def get_project_settings_endpoint(project_id: str) -> ProjectSettingsRead:
         search_enabled=stored.get("search_enabled"),
         section_search_enabled=stored.get("section_search_enabled"),
         citation_style=stored.get("citation_style"),
+        target_length=stored.get("target_length"),
         defaults={
             # "Use default" resolves through the document-type profile, so
             # the UI shows what this project would actually do.
@@ -105,6 +106,7 @@ def update_project_settings_endpoint(
         "search_enabled": payload.search_enabled,
         "section_search_enabled": payload.section_search_enabled,
         "citation_style": payload.citation_style,
+        "target_length": payload.target_length,
     }
     # A run-affecting setting changed, so invalidate stale artifacts on next run.
     # citation_style is deliberately excluded: it only changes how the final
@@ -113,6 +115,7 @@ def update_project_settings_endpoint(
     changed = (
         stored.get("search_enabled") != payload.search_enabled
         or stored.get("section_search_enabled") != payload.section_search_enabled
+        or stored.get("target_length") != payload.target_length
     )
     set_project_settings(project_id, updated)
     if changed:

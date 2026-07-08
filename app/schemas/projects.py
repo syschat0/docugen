@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.doc_types import is_valid_doc_type
@@ -42,12 +44,16 @@ class ProjectSettingsUpdate(BaseModel):
     search_enabled: bool | None = None
     section_search_enabled: bool | None = None
     citation_style: Literal["numeric", "author_date"] | None = None
+    # Total body-length budget in characters; None lets the brief-extracted
+    # length (or no budget) apply.
+    target_length: int | None = Field(default=None, ge=100, le=200000)
 
 
 class ProjectSettingsRead(BaseModel):
     search_enabled: bool | None = None
     section_search_enabled: bool | None = None
     citation_style: str | None = None
+    target_length: int | None = None
     # Global env defaults, so the UI can show what "use default" resolves to.
     defaults: dict[str, bool | str]
 

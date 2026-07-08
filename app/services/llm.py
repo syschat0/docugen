@@ -673,6 +673,10 @@ for example "-이다/한다체 (격식 있는 문어체)" or "-입니다체 (정
 Default register for this document type: {profile.get("style_hint", "")}.
 Use it unless the request or answers imply another.
 
+Set "target_length_chars" to the total body length in characters ONLY when the
+request or answers state one (e.g. "3000자" -> 3000, "A4 2장" -> about 3600).
+Use null when no length was specified. Never invent a length.
+
 Return this JSON shape:
 {{
   "topic": "",
@@ -681,6 +685,7 @@ Return this JSON shape:
   "tone": "",
   "style": "",
   "format": "markdown document",
+  "target_length_chars": null,
   "must_include": [],
   "must_avoid": [],
   "source_notes": [],
@@ -691,10 +696,21 @@ Return this JSON shape:
     return parsed, usage
 
 
+def _length_block(doc_target: int | None) -> str:
+    if not doc_target:
+        return ""
+    return (
+        f"\nDocument length budget: about {doc_target} characters of body text "
+        "in total. Size the structure to fit it - fewer, larger parts for a "
+        "short document; do not pad a short budget with many small parts.\n"
+    )
+
+
 def generate_outline(
     project: ProjectRead,
     brief: Dict[str, Any],
     profile: Dict[str, Any] | None = None,
+    doc_target: int | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     parsed, usage = _json_chat(
         "You create concise document outlines. Return only valid JSON.",
@@ -704,7 +720,7 @@ Project title:
 
 Brief JSON:
 {json.dumps(brief, ensure_ascii=False)}
-{_type_block(profile, "outline_guidance")}
+{_type_block(profile, "outline_guidance")}{_length_block(doc_target)}
 Create a high-level outline. Return this JSON shape:
 {{
   "chapters": [
@@ -805,6 +821,7 @@ def expand_chapter_subtree(
     existing_leaf_titles: list[str],
     feedback: Dict[str, Any] | None = None,
     profile: Dict[str, Any] | None = None,
+    doc_target: int | None = None,
 ) -> tuple[list[Dict[str, Any]], dict[str, Any] | None]:
     chapter_id = str(chapter.get("id") or "1")
     chapter_title = str(chapter.get("title") or f"Chapter {chapter_id}")
@@ -823,7 +840,7 @@ Project title:
 
 Brief summary JSON:
 {json.dumps(_brief_context(brief), ensure_ascii=False)}
-{_type_block(profile, "outline_guidance")}
+{_type_block(profile, "outline_guidance")}{_length_block(doc_target)}
 Current chapter JSON:
 {json.dumps(chapter, ensure_ascii=False)}
 
@@ -873,10 +890,16 @@ def generate_section_plan(
     outline: Dict[str, Any],
     research: Dict[str, Any] | None,
     profile: Dict[str, Any] | None = None,
+    doc_target: int | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     chapters = outline.get("chapters")
     if not isinstance(chapters, list) or not chapters:
         raise LLMError("Section plan input missing outline chapters")
+    # Each chapter sees its share of the document budget so leaf counts and
+    # target lengths come out proportionate.
+    chapter_target = (
+        max(int(doc_target / max(len(chapters), 1)), 300) if doc_target else None
+    )
 
     outline_tree: list[Dict[str, Any]] = []
     usage_items: list[dict[str, Any]] = []
@@ -888,7 +911,8 @@ def generate_section_plan(
         chapter_id = str(chapter.get("id") or len(outline_tree) + 1)
         chapter_title = str(chapter.get("title") or f"Chapter {chapter_id}")
         children, usage = expand_chapter_subtree(
-            project, brief, chapter, planned_leaf_titles, profile=profile
+            project, brief, chapter, planned_leaf_titles, profile=profile,
+            doc_target=chapter_target,
         )
         planned_leaf_titles.extend(collect_leaf_titles(children))
         outline_tree.append(

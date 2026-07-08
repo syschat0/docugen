@@ -136,7 +136,12 @@ def set_app_setting(key: str, value: Dict[str, Any]) -> None:
 
 # Per-project overrides for run-affecting flags. A value of None means "use the
 # global env default"; only keys the user explicitly set are stored.
-PROJECT_SETTING_KEYS = ("search_enabled", "section_search_enabled", "citation_style")
+PROJECT_SETTING_KEYS = (
+    "search_enabled",
+    "section_search_enabled",
+    "citation_style",
+    "target_length",
+)
 
 
 def get_project_settings(project_id: str) -> Dict[str, Any]:
@@ -1715,7 +1720,41 @@ def _int_or_default(value: Any, default: int) -> int:
         return default
 
 
-def _normalize_section_plan(section_plan: Dict[str, Any]) -> Dict[str, Any]:
+def _document_target_length(project_id: str, brief: Dict[str, Any]) -> int | None:
+    """Total body-length budget: explicit setting first, then the length the
+    brief extracted from the request/answers. None means no budget."""
+    value = _int_or_default(get_project_settings(project_id).get("target_length"), 0)
+    if value <= 0:
+        value = _int_or_default((brief or {}).get("target_length_chars"), 0)
+    if value <= 0:
+        return None
+    return min(max(value, 500), 100_000)
+
+
+def _scale_section_lengths(
+    section_plan: Dict[str, Any], doc_target: int | None
+) -> Dict[str, Any]:
+    """Distribute the document budget proportionally across leaf sections.
+
+    Scaling happens at run time on the in-memory plan (never stored), so a
+    changed budget re-flows lengths without rewriting the plan artifact.
+    Per-section lengths are clamped to a writable range."""
+    sections = section_plan.get("sections") or []
+    if not doc_target or not sections:
+        return section_plan
+    current = [max(_int_or_default(s.get("target_length"), 500), 1) for s in sections]
+    total = sum(current)
+    if total <= 0:
+        return section_plan
+    scale = doc_target / total
+    for section, length in zip(sections, current):
+        section["target_length"] = int(min(max(length * scale, 150), 3000))
+    return section_plan
+
+
+def _normalize_section_plan(
+    section_plan: Dict[str, Any], default_length: int = 500
+) -> Dict[str, Any]:
     outline_tree = section_plan.get("outline_tree")
     sections = section_plan.get("sections")
 
@@ -1749,7 +1788,7 @@ def _normalize_section_plan(section_plan: Dict[str, Any]) -> Dict[str, Any]:
                 "depth": _int_or_default(section.get("depth"), (len(path) or 1) + 1),
                 "purpose": str(section.get("purpose", "")),
                 "key_points": section.get("key_points") if isinstance(section.get("key_points"), list) else [],
-                "target_length": _int_or_default(section.get("target_length"), 500),
+                "target_length": _int_or_default(section.get("target_length"), default_length),
             }
         )
 
@@ -2043,6 +2082,7 @@ def _draft_conditions(project_id: str) -> Dict[str, Any]:
         "search_enabled": effective_search_enabled(project_id),
         "section_search_enabled": effective_section_search_enabled(project_id),
         "citation_style": effective_citation_style(project_id),
+        "target_length": get_project_settings(project_id).get("target_length"),
         "reference_count": len(references),
         "reference_titles": [(ref.title or ref.source) for ref in references[:8]],
         "model": model,
@@ -2394,6 +2434,8 @@ def run_document_generation(
             brief_time = brief_artifact.updated_at if brief_artifact else utc_now_iso()
             _complete_agent_run(run_id, {"artifact_id": artifact_ids[-1]}, token_usage=usage)
 
+        doc_target = _document_target_length(project_id, brief)
+
         outline_artifact = _latest_artifact(project_id, "outline")
         if outline_artifact is not None and _is_fresh(
             outline_artifact.updated_at, brief_time
@@ -2410,7 +2452,9 @@ def run_document_generation(
         else:
             run_id = _start_agent_run(project_id, agent_name, "outline", {"brief": brief})
             if settings.llm_enabled:
-                outline, usage = generate_outline(project, brief, profile=profile)
+                outline, usage = generate_outline(
+                    project, brief, profile=profile, doc_target=doc_target
+                )
             else:
                 outline, usage = _local_outline(project, brief), None
             with get_connection() as conn:
@@ -2559,12 +2603,13 @@ def run_document_generation(
                     message="Review and approve the outline, then start writing again.",
                 )
 
+        default_length = int(profile.get("default_section_length", 500))
         section_plan_artifact = _latest_artifact(project_id, "section_plan")
         if section_plan_artifact is not None and _is_fresh(
             section_plan_artifact.updated_at, outline_review_time
         ):
             section_plan = section_plan_artifact.content or {}
-            section_plan = _normalize_section_plan(section_plan)
+            section_plan = _normalize_section_plan(section_plan, default_length)
             sections = section_plan.get("sections", [])
             artifact_ids.append(section_plan_artifact.id)
             _complete_reuse_run(
@@ -2583,11 +2628,12 @@ def run_document_generation(
             )
             if settings.llm_enabled:
                 section_plan, usage = generate_section_plan(
-                    project, brief, outline, research, profile=profile
+                    project, brief, outline, research, profile=profile,
+                    doc_target=doc_target,
                 )
             else:
                 section_plan, usage = _local_section_plan(outline), None
-            section_plan = _normalize_section_plan(section_plan)
+            section_plan = _normalize_section_plan(section_plan, default_length)
             sections = section_plan["sections"]
             with get_connection() as conn:
                 artifact_ids.append(
@@ -2650,7 +2696,7 @@ def run_document_generation(
                     profile=profile,
                 )
                 if revised_plan is not None:
-                    section_plan = _normalize_section_plan(revised_plan)
+                    section_plan = _normalize_section_plan(revised_plan, default_length)
                     sections = section_plan["sections"]
                     revision_applied = True
                     if revise_usage and usage:
@@ -2698,6 +2744,12 @@ def run_document_generation(
                 },
                 token_usage=usage,
             )
+
+        # Apply the document length budget to whichever plan survived review.
+        # Stored plan artifacts keep the model's original lengths; the budget
+        # re-flows them at run time, so changing it never rewrites the plan.
+        section_plan = _scale_section_lengths(section_plan, doc_target)
+        sections = section_plan["sections"]
 
         chapter_sources_artifact = _latest_artifact(project_id, "chapter_sources")
         if chapter_sources_artifact is not None and _is_fresh(
