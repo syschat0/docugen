@@ -1288,6 +1288,22 @@ def _invalidate_from_phase(project_id: str, phase: str) -> None:
             "targeted_revision",
             "draft",
         ],
+        # Rerunning from intake means "collect questions again": everything
+        # downstream regenerates; unanswered pending questions are dropped
+        # below while answered ones (and their decisions) survive so the
+        # planner does not re-ask them.
+        "intake": [
+            "research_sources",
+            "source_summaries",
+            "brief",
+            "outline",
+            "outline_review",
+            "section_plan",
+            "section_plan_review",
+            "chapter_sources",
+            "section_draft",
+            "draft",
+        ],
         "research": [
             "research_sources",
             "source_summaries",
@@ -1381,7 +1397,12 @@ def _invalidate_from_phase(project_id: str, phase: str) -> None:
             f"DELETE FROM artifacts WHERE project_id = ? AND type IN ({placeholders})",
             (project_id, *artifact_types),
         )
-        if phase in {"section_writing", "section_summary", "continuity_review", "targeted_revision", "final_merge", "section_plan", "section_plan_review"}:
+        if phase == "intake":
+            conn.execute(
+                "DELETE FROM pending_questions WHERE project_id = ? AND status = ?",
+                (project_id, "pending"),
+            )
+        if phase in {"intake", "section_writing", "section_summary", "continuity_review", "targeted_revision", "final_merge", "section_plan", "section_plan_review"}:
             conn.execute("DELETE FROM summaries WHERE project_id = ?", (project_id,))
         run_placeholders = ",".join("?" for _ in run_phases)
         conn.execute(
@@ -2251,7 +2272,11 @@ def run_document_generation(
                 ("failed", phase, failed_at, project_id),
             )
 
-    if settings.llm_enabled and not decisions:
+    # A forced intake rerun re-plans questions even when answers exist: the
+    # planner sees the saved decisions, so it only asks what is still missing
+    # (or nothing, letting the run continue into drafting).
+    force_intake = force_from == "intake"
+    if settings.llm_enabled and (not decisions or force_intake):
         run_id = _start_agent_run(
             project_id,
             agent_name,
@@ -2260,6 +2285,7 @@ def run_document_generation(
                 "title": project.title,
                 "initial_request": project.initial_request,
                 "document_type": project.document_type,
+                "forced": force_intake,
             },
         )
         try:
