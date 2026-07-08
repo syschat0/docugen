@@ -28,6 +28,7 @@ from app.services.llm import (
     apply_section_revisions,
     classify_document_type,
     collect_leaf_titles,
+    derive_style_card,
     expand_chapter_subtree,
     generate_brief,
     generate_outline,
@@ -75,6 +76,7 @@ class WorkflowCancelledError(Exception):
 
 WORKFLOW_STEPS: list[tuple[str, str]] = [
     ("intake", "Intake questions"),
+    ("style_card", "Style card"),
     ("research", "Web research"),
     ("source_summary", "Source summaries"),
     ("brief", "Brief"),
@@ -955,7 +957,11 @@ def _merge_reference_sources(
     """
     ready = [
         ref for ref in references
-        if ref.status == "ready" and (ref.content_text or "").strip()
+        # Style samples are voice exemplars, not facts: they never enter the
+        # research source pool (and so are never cited).
+        if ref.kind != "style"
+        and ref.status == "ready"
+        and (ref.content_text or "").strip()
     ]
     if not ready:
         return
@@ -1268,6 +1274,13 @@ def _latest_artifacts(project_id: str, artifact_type: str) -> List[ArtifactRead]
 
 def _invalidate_from_phase(project_id: str, phase: str) -> None:
     artifact_types_by_phase = {
+        # A regenerated style card changes how sections sound, not what the
+        # document covers, so it invalidates drafts but keeps the plan.
+        "style_card": [
+            "style_card",
+            "section_draft",
+            "draft",
+        ],
         "research": [
             "research_sources",
             "source_summaries",
@@ -2310,6 +2323,72 @@ def run_document_generation(
         )
 
     try:
+        # Style card: distill the user's writing samples into a voice guide.
+        # Best effort - a failed derivation records the error and the run
+        # continues without a card.
+        style_samples = [
+            ref
+            for ref in list_project_references(project_id)
+            if ref.kind == "style"
+            and ref.status == "ready"
+            and (ref.content_text or "").strip()
+        ]
+        style_card: Dict[str, Any] | None = None
+        style_card_artifact = _latest_artifact(project_id, "style_card")
+        if not style_samples:
+            _complete_reuse_run(
+                project_id,
+                agent_name,
+                "style_card",
+                {"skipped": True, "reason": "no style samples"},
+            )
+        elif style_card_artifact is not None and _is_fresh(
+            style_card_artifact.updated_at, input_cutoff
+        ):
+            style_card = style_card_artifact.content or {}
+            artifact_ids.append(style_card_artifact.id)
+            _complete_reuse_run(
+                project_id,
+                agent_name,
+                "style_card",
+                {"artifact_id": style_card_artifact.id},
+            )
+        elif not settings.llm_enabled:
+            _complete_reuse_run(
+                project_id,
+                agent_name,
+                "style_card",
+                {"skipped": True, "reason": "llm disabled"},
+            )
+        else:
+            run_id = _start_agent_run(
+                project_id,
+                agent_name,
+                "style_card",
+                {"sample_count": len(style_samples)},
+            )
+            try:
+                style_card, usage = derive_style_card(project, style_samples)
+            except LLMError as exc:
+                _complete_agent_run(run_id, {"error": str(exc)}, status="completed")
+                style_card = None
+            else:
+                with get_connection() as conn:
+                    artifact_ids.append(
+                        _insert_artifact(
+                            conn,
+                            project_id,
+                            "style_card",
+                            "Style card",
+                            style_card,
+                            utc_now_iso(),
+                            agent_name,
+                        )
+                    )
+                _complete_agent_run(
+                    run_id, {"artifact_id": artifact_ids[-1]}, token_usage=usage
+                )
+
         research_artifact = _latest_artifact(project_id, "research_sources")
         if research_artifact is not None and _is_fresh(
             research_artifact.updated_at, input_cutoff
@@ -2433,6 +2512,12 @@ def run_document_generation(
             brief_artifact = get_artifact(project_id, artifact_ids[-1])
             brief_time = brief_artifact.updated_at if brief_artifact else utc_now_iso()
             _complete_agent_run(run_id, {"artifact_id": artifact_ids[-1]}, token_usage=usage)
+
+        # The style card is authoritative for register: downstream prompts read
+        # brief["style"], so override the in-memory brief (the stored brief
+        # artifact keeps the model's original register).
+        if style_card and str(style_card.get("register") or "").strip():
+            brief = {**brief, "style": str(style_card["register"]).strip()}
 
         doc_target = _document_target_length(project_id, brief)
 
@@ -2940,6 +3025,7 @@ def run_document_generation(
                         chapter_digests=chapter_digests,
                         glossary=glossary,
                         profile=profile,
+                        style_card=style_card,
                     )
                 else:
                     markdown, usage = _local_section_draft(
@@ -3644,6 +3730,7 @@ def get_workflow_progress(project_id: str) -> Optional[WorkflowProgressRead]:
     )
 
     inferred_phase_times = {
+        "style_card": artifact_times.get("style_card"),
         "research": artifact_times.get("research_sources"),
         "source_summary": artifact_times.get("source_summaries"),
         "brief": artifact_times.get("brief"),

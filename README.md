@@ -200,6 +200,18 @@ guidance and rendering/search defaults - the pipeline stages are the same
 for every type - so changing the type invalidates cached artifacts the
 same way editing the request does.
 
+## Style Samples
+
+Upload your own writing (.txt/.md) in the "Style samples" panel and the
+pipeline derives a style card from it - register, voice, person, tense,
+sentence rhythm, vocabulary, plus a few verbatim exemplar sentences. The
+card is stored as a `style_card` artifact, injected into every
+section-writing prompt, and its register overrides the brief's, so
+revision and seam-smoothing prompts follow it too. Style samples never
+enter the research source pool (they are voice exemplars, not facts, so
+they are never cited). Without samples the stage is skipped; a failed
+derivation records the error and the run continues without a card.
+
 ## Document Length
 
 Set a total body-length budget (characters) in the project settings panel,

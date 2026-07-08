@@ -645,6 +645,105 @@ Return this JSON shape:
     return query, usage
 
 
+def derive_style_card(
+    project: ProjectRead, samples: list[Any]
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    """Distill user-provided writing samples into a reusable style card.
+
+    The card captures how the samples sound (register, voice, rhythm,
+    vocabulary) plus a few verbatim exemplar sentences, and is injected into
+    every section-writing prompt so the document mimics the samples.
+    """
+    excerpts = []
+    for sample in samples[:3]:
+        title = str(getattr(sample, "title", "") or getattr(sample, "source", "sample"))
+        text = str(getattr(sample, "content_text", "") or "")[:1500]
+        excerpts.append(f"--- Sample: {title} ---\n{text}")
+    samples_block = "\n\n".join(excerpts)
+
+    parsed, usage = _json_chat(
+        "You analyze writing samples and produce a compact style card that lets "
+        "another writer imitate them faithfully. Return only valid JSON.",
+        f"""
+Writing samples provided by the user:
+
+{samples_block}
+
+Describe, in the same language as the samples, exactly how these samples are
+written. Quote 2-4 short verbatim sentences from the samples as exemplars.
+For Korean samples name the sentence register explicitly (e.g. "-이다/한다체",
+"-습니다체", "-이에요/해요체").
+
+Return this JSON shape:
+{{
+  "register": "",
+  "voice": "",
+  "person": "",
+  "tense": "",
+  "sentence_rhythm": "",
+  "vocabulary": "",
+  "devices": [],
+  "avoid": [],
+  "exemplars": []
+}}
+""",
+    )
+    if not str(parsed.get("register") or "").strip() and not str(
+        parsed.get("voice") or ""
+    ).strip():
+        raise LLMError("Style card response missing register and voice")
+    return {
+        "register": _clip(parsed.get("register"), 120),
+        "voice": _clip(parsed.get("voice"), 200),
+        "person": _clip(parsed.get("person"), 80),
+        "tense": _clip(parsed.get("tense"), 80),
+        "sentence_rhythm": _clip(parsed.get("sentence_rhythm"), 200),
+        "vocabulary": _clip(parsed.get("vocabulary"), 200),
+        "devices": [_clip(item, 80) for item in (parsed.get("devices") or [])[:6]],
+        "avoid": [_clip(item, 80) for item in (parsed.get("avoid") or [])[:6]],
+        "exemplars": [
+            _clip(item, 200) for item in (parsed.get("exemplars") or [])[:4]
+        ],
+    }, usage
+
+
+def _style_card_block(style_card: Dict[str, Any] | None) -> str:
+    if not style_card:
+        return ""
+    card = {
+        key: style_card.get(key)
+        for key in (
+            "register",
+            "voice",
+            "person",
+            "tense",
+            "sentence_rhythm",
+            "vocabulary",
+            "devices",
+            "avoid",
+        )
+        if style_card.get(key)
+    }
+    if not card:
+        return ""
+    block = f"""
+
+Voice & style card, distilled from the user's own writing samples
+(authoritative for how this document must sound):
+{json.dumps(card, ensure_ascii=False)}"""
+    exemplars = [
+        str(item).strip()
+        for item in (style_card.get("exemplars") or [])[:4]
+        if str(item).strip()
+    ]
+    if exemplars:
+        exemplar_lines = "\n".join(f"- {item}" for item in exemplars)
+        block += f"""
+Example sentences in the target style (imitate their sound, not their content):
+{exemplar_lines}"""
+    return block
+
+
 def generate_brief(
     project: ProjectRead,
     decisions: list[UserDecisionRead],
@@ -1038,6 +1137,7 @@ def write_section_with_summary(
     chapter_digests: list[Dict[str, Any]] | None = None,
     glossary: list[str] | None = None,
     profile: Dict[str, Any] | None = None,
+    style_card: Dict[str, Any] | None = None,
 ) -> tuple[str, Dict[str, Any], dict[str, Any] | None]:
     profile = profile or get_doc_type_profile(None)
     style = str(brief.get("style") or brief.get("tone") or "match the initial request")
@@ -1126,7 +1226,7 @@ Current section JSON:
 {json.dumps(section, ensure_ascii=False)}
 
 Previous section summary JSON:
-{json.dumps(_clip_summary(previous_summary), ensure_ascii=False)}{digest_block}{glossary_block}
+{json.dumps(_clip_summary(previous_summary), ensure_ascii=False)}{digest_block}{glossary_block}{_style_card_block(style_card)}
 
 Relevant sources:
 {_source_context(sources)}{feedback_block}

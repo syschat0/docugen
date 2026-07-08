@@ -178,14 +178,18 @@ def add_url_references_endpoint(
     status_code=201,
 )
 async def add_file_references_endpoint(
-    project_id: str, files: List[UploadFile] = File(...)
+    project_id: str, files: List[UploadFile] = File(...), kind: str = "file"
 ) -> List[ProjectReferenceRead]:
     _require_project(project_id)
+    if kind not in {"file", "style"}:
+        raise HTTPException(status_code=422, detail="kind must be 'file' or 'style'")
     _require_reference_capacity(project_id, len(files))
     entries = []
     for upload in files:
         data = await upload.read(MAX_FILE_BYTES + 1)
-        entries.append(extract_file_reference(upload.filename or "unnamed", data))
+        entries.append(
+            extract_file_reference(upload.filename or "unnamed", data, kind=kind)
+        )
     created = add_project_references(project_id, entries)
     mark_project_inputs_changed(project_id)
     return created

@@ -88,8 +88,12 @@ def _file_suffix(filename: str) -> str:
     return PurePosixPath(name).suffix.lower()
 
 
-def extract_file_reference(filename: str, data: bytes) -> dict[str, str]:
-    entry = _base_entry("file", filename)
+def extract_file_reference(
+    filename: str, data: bytes, kind: str = "file"
+) -> dict[str, str]:
+    """kind "file" feeds the research source pool; kind "style" marks a
+    writing sample used only for style-card derivation."""
+    entry = _base_entry(kind, filename)
     entry["title"] = filename
     suffix = _file_suffix(filename)
     if suffix not in ALLOWED_FILE_SUFFIXES:

@@ -114,6 +114,9 @@ const translations = {
     docType: "Document type",
     autoDetect: "Auto detect",
     docTypeSaved: "Document type saved. The next run will rewrite the document.",
+    styleSamples: "Style samples",
+    styleSamplesHint: "Upload your own writing (.txt, .md); the document will imitate its voice.",
+    noStyleSamples: "No style samples.",
     targetLength: "Target length (characters)",
     targetLengthAuto: "Auto (from the request)",
     citationStyle: "Citation style",
@@ -298,6 +301,9 @@ const translations = {
     docType: "문서 유형",
     autoDetect: "자동 감지",
     docTypeSaved: "문서 유형을 저장했습니다. 다음 실행 시 문서를 새로 작성합니다.",
+    styleSamples: "문체 샘플",
+    styleSamplesHint: "직접 쓴 글(.txt, .md)을 올리면 그 문체를 모사해 작성합니다.",
+    noStyleSamples: "문체 샘플이 없습니다.",
     targetLength: "목표 분량(자)",
     targetLengthAuto: "자동 (요청문에서 추출)",
     citationStyle: "참고문헌 표기법",
@@ -394,6 +400,7 @@ const translations = {
 const phaseLabels = {
   en: {
     intake: "Intake questions",
+    style_card: "Style card",
     research: "Web research",
     source_summary: "Source summaries",
     brief: "Brief",
@@ -411,6 +418,7 @@ const phaseLabels = {
   },
   ko: {
     intake: "질문 수집",
+    style_card: "문체 카드",
     research: "웹 검색",
     source_summary: "출처 요약",
     brief: "작성 브리프",
@@ -464,6 +472,9 @@ const els = {
   targetLengthInput: document.querySelector("#targetLengthInput"),
   projectDocType: document.querySelector("#projectDocType"),
   docTypeSelect: document.querySelector("#docTypeSelect"),
+  addStyleFiles: document.querySelector("#addStyleFiles"),
+  addStyleFilesButton: document.querySelector("#addStyleFilesButton"),
+  styleSampleList: document.querySelector("#styleSampleList"),
   referenceList: document.querySelector("#referenceList"),
   projectList: document.querySelector("#projectList"),
   projectCount: document.querySelector("#projectCount"),
@@ -886,20 +897,32 @@ async function loadReferences() {
 
 function renderReferences() {
   els.referenceList.innerHTML = "";
-  if (!state.references.length) {
+  if (els.styleSampleList) els.styleSampleList.innerHTML = "";
+  const contentRefs = state.references.filter((ref) => ref.kind !== "style");
+  const styleRefs = state.references.filter((ref) => ref.kind === "style");
+  if (!contentRefs.length) {
     const empty = document.createElement("p");
     empty.className = "item-meta";
     empty.textContent = t("noReferences");
     els.referenceList.append(empty);
-    return;
+  }
+  if (els.styleSampleList && !styleRefs.length) {
+    const empty = document.createElement("p");
+    empty.className = "item-meta";
+    empty.textContent = t("noStyleSamples");
+    els.styleSampleList.append(empty);
   }
 
   for (const reference of state.references) {
+    const target =
+      reference.kind === "style" ? els.styleSampleList : els.referenceList;
+    if (!target) continue;
     const item = document.createElement("div");
     item.className = "reference-item";
 
     const icon = document.createElement("span");
-    icon.textContent = reference.kind === "url" ? "🔗" : "📄";
+    icon.textContent =
+      reference.kind === "url" ? "🔗" : reference.kind === "style" ? "✍️" : "📄";
     item.append(icon);
 
     if (reference.kind === "url") {
@@ -931,7 +954,7 @@ function renderReferences() {
     remove.addEventListener("click", () => deleteReference(reference.id));
     item.append(remove);
 
-    els.referenceList.append(item);
+    target.append(item);
   }
 }
 
@@ -2231,6 +2254,29 @@ els.addReferenceFilesButton?.addEventListener("click", async () => {
       body: formData,
     });
     els.addReferenceFiles.value = "";
+    showToast(t("referenceAdded"));
+    await loadReferences();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+els.addStyleFilesButton?.addEventListener("click", async () => {
+  const project = selectedProject();
+  if (!project) return;
+  const files = Array.from(els.addStyleFiles.files || []);
+  if (!files.length) {
+    showToast(t("selectFiles"), true);
+    return;
+  }
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file);
+  try {
+    await api(`/projects/${project.id}/references/files?kind=style`, {
+      method: "POST",
+      body: formData,
+    });
+    els.addStyleFiles.value = "";
     showToast(t("referenceAdded"));
     await loadReferences();
   } catch (error) {
