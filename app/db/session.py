@@ -28,6 +28,13 @@ def get_connection() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Additive migration for databases created before the column existed."""
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(
@@ -36,6 +43,7 @@ def init_db() -> None:
               id TEXT PRIMARY KEY,
               title TEXT NOT NULL,
               initial_request TEXT NOT NULL,
+              document_type TEXT,
               status TEXT NOT NULL,
               current_phase TEXT,
               created_at TEXT NOT NULL,
@@ -143,4 +151,5 @@ def init_db() -> None:
             );
             """
         )
+        _ensure_column(conn, "projects", "document_type", "document_type TEXT")
 

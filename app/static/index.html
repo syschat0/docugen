@@ -77,6 +77,12 @@
               <textarea id="projectRequest" name="initial_request" required rows="4"></textarea>
             </label>
             <label>
+              <span data-i18n="docType">Document type</span>
+              <select id="projectDocType">
+                <option value="auto" data-i18n="autoDetect">Auto detect</option>
+              </select>
+            </label>
+            <label>
               <span data-i18n="referenceUrls">Reference URLs (one per line)</span>
               <textarea id="projectReferenceUrls" rows="2" placeholder="https://"></textarea>
             </label>
@@ -155,6 +161,12 @@
 
                 <h4 class="references-title" data-i18n="runConditions">Run conditions</h4>
                 <div class="settings-row">
+                  <label>
+                    <span data-i18n="docType">Document type</span>
+                    <select id="docTypeSelect">
+                      <option value="auto" data-i18n="autoDetect">Auto detect</option>
+                    </select>
+                  </label>
                   <label>
                     <span data-i18n="externalSearch">External search</span>
                     <select id="searchEnabledSelect">

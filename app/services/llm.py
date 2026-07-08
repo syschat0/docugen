@@ -9,6 +9,7 @@ from app.services.llm_settings import get_active_llm_config
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
 from app.services.citations import citation_markers
+from app.services.doc_types import DEFAULT_DOC_TYPE, DOC_TYPES, get_doc_type_profile
 
 
 class LLMError(Exception):
@@ -459,8 +460,54 @@ Invalid response:
         return repaired, None
 
 
+def _type_block(profile: Dict[str, Any] | None, guidance_key: str) -> str:
+    """Genre conventions block injected into a stage prompt ('' when absent)."""
+    profile = profile or get_doc_type_profile(None)
+    guidance = str(profile.get(guidance_key) or "").strip()
+    if not guidance:
+        return ""
+    return (
+        f"\nDocument type: {profile.get('label_en', 'Report')}\n"
+        f"Type conventions:\n{guidance}\n"
+    )
+
+
+def classify_document_type(
+    project: ProjectRead,
+) -> tuple[str, dict[str, Any] | None]:
+    """Pick the document type key that best matches the writing request."""
+    choices = "\n".join(
+        f"- {key}: {profile['classify_hint']}" for key, profile in DOC_TYPES.items()
+    )
+    parsed, usage = _json_chat(
+        "You classify a writing request into one document type. Return only valid JSON.",
+        f"""
+Project title:
+{project.title}
+
+Initial request:
+{project.initial_request}
+
+Document types:
+{choices}
+
+Pick the single best matching type key for this request. When nothing fits
+well, use "{DEFAULT_DOC_TYPE}".
+
+Return this JSON shape:
+{{
+  "document_type": ""
+}}
+""",
+    )
+    key = str(parsed.get("document_type", "")).strip()
+    return (key if key in DOC_TYPES else DEFAULT_DOC_TYPE), usage
+
+
 def plan_user_questions(
-    project: ProjectRead, decisions: list[UserDecisionRead]
+    project: ProjectRead,
+    decisions: list[UserDecisionRead],
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     decision_lines = "\n".join(
         f"- {decision.question}: {decision.answer}" for decision in decisions
@@ -476,12 +523,14 @@ Project title:
 
 Initial request:
 {project.initial_request}
-
+{_type_block(profile, "brief_guidance")}
 Known user answers:
 {decision_lines}
 
 Decide whether more user input is needed before writing.
 Ask at most 5 questions. Do not ask questions already answered above.
+Ask about what matters for this document type (audience, occasion, scope,
+register, target length) rather than generic details.
 If the request is already clear enough for a useful first draft, return no questions.
 
 Return this exact JSON shape:
@@ -600,7 +649,9 @@ def generate_brief(
     project: ProjectRead,
     decisions: list[UserDecisionRead],
     research: Dict[str, Any] | None,
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    profile = profile or get_doc_type_profile(None)
     parsed, usage = _json_chat(
         "You create compact document briefs. Return only valid JSON.",
         f"""
@@ -609,7 +660,7 @@ Project title:
 
 Initial request:
 {project.initial_request}
-
+{_type_block(profile, "brief_guidance")}
 User answers and decisions:
 {_decision_lines(decisions)}
 
@@ -619,6 +670,8 @@ Search sources:
 "style" is the exact sentence register every section must use, written in the
 document's language. For Korean documents choose one register explicitly,
 for example "-이다/한다체 (격식 있는 문어체)" or "-입니다체 (정중한 설명체)".
+Default register for this document type: {profile.get("style_hint", "")}.
+Use it unless the request or answers imply another.
 
 Return this JSON shape:
 {{
@@ -639,7 +692,9 @@ Return this JSON shape:
 
 
 def generate_outline(
-    project: ProjectRead, brief: Dict[str, Any]
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     parsed, usage = _json_chat(
         "You create concise document outlines. Return only valid JSON.",
@@ -649,7 +704,7 @@ Project title:
 
 Brief JSON:
 {json.dumps(brief, ensure_ascii=False)}
-
+{_type_block(profile, "outline_guidance")}
 Create a high-level outline. Return this JSON shape:
 {{
   "chapters": [
@@ -749,6 +804,7 @@ def expand_chapter_subtree(
     chapter: Dict[str, Any],
     existing_leaf_titles: list[str],
     feedback: Dict[str, Any] | None = None,
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[list[Dict[str, Any]], dict[str, Any] | None]:
     chapter_id = str(chapter.get("id") or "1")
     chapter_title = str(chapter.get("title") or f"Chapter {chapter_id}")
@@ -767,7 +823,7 @@ Project title:
 
 Brief summary JSON:
 {json.dumps(_brief_context(brief), ensure_ascii=False)}
-
+{_type_block(profile, "outline_guidance")}
 Current chapter JSON:
 {json.dumps(chapter, ensure_ascii=False)}
 
@@ -816,6 +872,7 @@ def generate_section_plan(
     brief: Dict[str, Any],
     outline: Dict[str, Any],
     research: Dict[str, Any] | None,
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     chapters = outline.get("chapters")
     if not isinstance(chapters, list) or not chapters:
@@ -831,7 +888,7 @@ def generate_section_plan(
         chapter_id = str(chapter.get("id") or len(outline_tree) + 1)
         chapter_title = str(chapter.get("title") or f"Chapter {chapter_id}")
         children, usage = expand_chapter_subtree(
-            project, brief, chapter, planned_leaf_titles
+            project, brief, chapter, planned_leaf_titles, profile=profile
         )
         planned_leaf_titles.extend(collect_leaf_titles(children))
         outline_tree.append(
@@ -956,9 +1013,13 @@ def write_section_with_summary(
     feedback: list[str] | None = None,
     chapter_digests: list[Dict[str, Any]] | None = None,
     glossary: list[str] | None = None,
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[str, Dict[str, Any], dict[str, Any] | None]:
+    profile = profile or get_doc_type_profile(None)
     style = str(brief.get("style") or brief.get("tone") or "match the initial request")
-    target_length = section.get("target_length") or 500
+    target_length = section.get("target_length") or profile.get(
+        "default_section_length", 500
+    )
     depth = section.get("depth") or 3
     titles_block = "\n".join(f"- {title}" for title in section_titles) or "- (none)"
     digest_block = ""
@@ -999,6 +1060,22 @@ User improvement requests for this section (must be reflected):
             "Keep node labels short, wrap labels containing special characters in "
             'double quotes, and never put citation markers inside the diagram.'
         )
+    section_title = str(section.get("title", ""))
+    heading_title = (
+        f"{section.get('id', '')} {section_title}".strip()
+        if profile.get("numbered_headings", True)
+        else section_title
+    )
+    if profile.get("citations_enabled", True):
+        citation_rule = (
+            "- When a source above supports a statement, cite it inline as [1] or [2] "
+            "matching the source numbers. Do not cite sources that are not listed."
+        )
+    else:
+        citation_rule = (
+            "- Use the sources only as background knowledge. Do NOT insert citation "
+            "markers such as [1] or a source list; this document type has no citations."
+        )
     content, usage = _chat_content(
         [
             {
@@ -1031,14 +1108,13 @@ Relevant sources:
 {_source_context(sources)}{feedback_block}
 
 Write only this section in Markdown, in the same language as the brief topic.
-Rules:
+{_type_block(profile, "section_guidance")}Rules:
 - Sentence register: {style}. Every sentence must use this register consistently.
 - Aim for roughly {target_length} characters of body text.
-- Start with exactly one heading: "{'#' * min(max(int(depth) if str(depth).isdigit() else 3, 2), 6)} {section.get('id', '')} {section.get('title', '')}".
+- Start with exactly one heading: "{'#' * min(max(int(depth) if str(depth).isdigit() else 3, 2), 6)} {heading_title}".
 - Do NOT add sub-headings inside this section. Use bold lead-ins or lists instead.
 - Do not repeat content from the previous summary or topics owned by other sections.
-- When a source above supports a statement, cite it inline as [1] or [2] matching
-  the source numbers. Do not cite sources that are not listed.{diagram_rule}
+{citation_rule}{diagram_rule}
 
 Return this JSON shape:
 {{

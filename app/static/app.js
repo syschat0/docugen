@@ -1,5 +1,6 @@
 const state = {
   projects: [],
+  docTypes: [],
   selectedProjectId: new URLSearchParams(window.location.search).get("project")?.trim() || null,
   progressTimer: null,
   activeTab: "questions",
@@ -110,6 +111,9 @@ const translations = {
     runConditions: "Run conditions",
     externalSearch: "External search",
     sectionSearch: "Section top-up search",
+    docType: "Document type",
+    autoDetect: "Auto detect",
+    docTypeSaved: "Document type saved. The next run will rewrite the document.",
     citationStyle: "Citation style",
     citationNumeric: "Numbered [1]",
     citationAuthorDate: "Author-date (APA)",
@@ -289,6 +293,9 @@ const translations = {
     runConditions: "생성 조건",
     externalSearch: "외부 검색",
     sectionSearch: "섹션 보강 검색",
+    docType: "문서 유형",
+    autoDetect: "자동 감지",
+    docTypeSaved: "문서 유형을 저장했습니다. 다음 실행 시 문서를 새로 작성합니다.",
     citationStyle: "참고문헌 표기법",
     citationNumeric: "번호식 [1]",
     citationAuthorDate: "저자-연도식 (APA)",
@@ -450,6 +457,8 @@ const els = {
   searchEnabledSelect: document.querySelector("#searchEnabledSelect"),
   sectionSearchSelect: document.querySelector("#sectionSearchSelect"),
   citationStyleSelect: document.querySelector("#citationStyleSelect"),
+  projectDocType: document.querySelector("#projectDocType"),
+  docTypeSelect: document.querySelector("#docTypeSelect"),
   referenceList: document.querySelector("#referenceList"),
   projectList: document.querySelector("#projectList"),
   projectCount: document.querySelector("#projectCount"),
@@ -832,6 +841,9 @@ async function renderSelectedProject() {
   els.detailStatus.textContent = statusLabel(project.status);
   els.detailRequest.textContent = project.initial_request;
   els.requestSummaryPreview.textContent = project.initial_request.split("\n")[0];
+  if (els.docTypeSelect) {
+    els.docTypeSelect.value = project.document_type || "auto";
+  }
 
   await Promise.all([
     loadProgress(),
@@ -940,6 +952,55 @@ function selectValueToSetting(value) {
   if (value === "on") return true;
   if (value === "off") return false;
   return null;
+}
+
+async function loadDocTypes() {
+  try {
+    state.docTypes = await api("/doc-types");
+  } catch {
+    state.docTypes = [];
+  }
+  populateDocTypeSelects();
+}
+
+function populateDocTypeSelects() {
+  for (const select of [els.projectDocType, els.docTypeSelect]) {
+    if (!select) continue;
+    const current = select.value || "auto";
+    select.innerHTML = "";
+    const auto = document.createElement("option");
+    auto.value = "auto";
+    auto.textContent = t("autoDetect");
+    select.append(auto);
+    for (const type of state.docTypes) {
+      const option = document.createElement("option");
+      option.value = type.key;
+      option.textContent = state.language === "ko" ? type.label_ko : type.label_en;
+      select.append(option);
+    }
+    select.value = [...select.options].some((option) => option.value === current)
+      ? current
+      : "auto";
+  }
+}
+
+async function saveDocType() {
+  const project = selectedProject();
+  if (!project || !els.docTypeSelect) return;
+  const value = els.docTypeSelect.value || "auto";
+  if ((project.document_type || "auto") === value) return;
+  try {
+    await api(`/projects/${project.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ document_type: value }),
+    });
+    showToast(t("docTypeSaved"));
+    await loadProjects();
+    await loadProjectSettings().catch(() => {});
+  } catch (error) {
+    showToast(error.message, true);
+    els.docTypeSelect.value = project.document_type || "auto";
+  }
 }
 
 async function loadProjectSettings() {
@@ -1921,6 +1982,7 @@ function renderTabs() {
 
 function rerenderCurrentView() {
   applyStaticTranslations();
+  populateDocTypeSelects();
   updateDocumentTitle();
   els.projectCount.textContent =
     state.language === "ko"
@@ -2166,6 +2228,7 @@ els.addReferenceFilesButton?.addEventListener("click", async () => {
 els.searchEnabledSelect?.addEventListener("change", saveProjectSettings);
 els.sectionSearchSelect?.addEventListener("change", saveProjectSettings);
 els.citationStyleSelect?.addEventListener("change", saveProjectSettings);
+els.docTypeSelect?.addEventListener("change", saveDocType);
 
 els.projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2176,11 +2239,13 @@ els.projectForm.addEventListener("submit", async (event) => {
   const referenceFiles = Array.from(els.projectReferenceFiles.files || []);
 
   try {
+    const docType = els.projectDocType?.value || "auto";
     const project = await api("/projects", {
       method: "POST",
       body: JSON.stringify({
         title: els.projectTitle.value,
         initial_request: els.projectRequest.value,
+        document_type: docType === "auto" ? null : docType,
       }),
     });
     state.selectedProjectId = project.id;
@@ -2415,6 +2480,7 @@ async function boot() {
   applyStaticTranslations();
   try {
     await loadHealth();
+    await loadDocTypes();
     await loadProjects();
   } catch (error) {
     showToast(error.message, true);

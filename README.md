@@ -177,6 +177,29 @@ DIAGRAMS_ENABLED=false
 CITATION_STYLE=numeric
 ```
 
+## Document Types
+
+Each project has a document type that shapes planning, writing, and
+rendering. Six types ship in `app/services/doc_types.py`:
+
+- `report` (default): structured informational report with citations.
+- `academic_paper`: 소논문-style thesis (서론/이론적 배경/본론/결론), strict
+  academic register, citations required.
+- `blog_post`: hook-driven chapters, conversational register, plain
+  (unnumbered) headings.
+- `essay`: single-voice reflective prose; web research and citations are
+  off by default.
+- `tech_doc`: task-oriented manual sections with steps and code blocks.
+- `presentation_script`: spoken segments with transitions and stage
+  directions; no citations, no numbered headings.
+
+Pick a type at project creation or leave it on auto detect: the first run
+classifies the request (one small LLM call) and stores the result, which
+the settings panel shows and lets you change. A profile only alters prompt
+guidance and rendering/search defaults - the pipeline stages are the same
+for every type - so changing the type invalidates cached artifacts the
+same way editing the request does.
+
 ## Citation Styles
 
 The merged draft renders citations in one of two styles, selectable per

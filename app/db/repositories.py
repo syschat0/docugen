@@ -22,9 +22,11 @@ from app.services.citations import (
     format_sources_section,
     render_citations,
 )
+from app.services.doc_types import get_doc_type_profile
 from app.services.llm import (
     LLMError,
     apply_section_revisions,
+    classify_document_type,
     collect_leaf_titles,
     expand_chapter_subtree,
     generate_brief,
@@ -184,7 +186,17 @@ def _override_or_default(project_id: str, key: str, default: bool) -> bool:
 
 
 def effective_search_enabled(project_id: str) -> bool:
-    return _override_or_default(project_id, "search_enabled", settings.search_enabled)
+    """Explicit override > document-type default, gated by the global flag.
+
+    A genre that does not want research (e.g. essays) disables it by
+    default, but a profile can never re-enable globally disabled search.
+    """
+    value = get_project_settings(project_id).get("search_enabled")
+    if value is not None:
+        return bool(value)
+    project = get_project(project_id)
+    profile = get_doc_type_profile(project.document_type if project else None)
+    return settings.search_enabled and bool(profile.get("research_default", True))
 
 
 def effective_section_search_enabled(project_id: str) -> bool:
@@ -216,14 +228,16 @@ def create_project(payload: ProjectCreate) -> ProjectRead:
         conn.execute(
             """
             INSERT INTO projects (
-                id, title, initial_request, status, current_phase, created_at, updated_at
+                id, title, initial_request, document_type, status, current_phase,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
                 payload.title,
                 payload.initial_request,
+                payload.document_type,
                 "created",
                 "intake",
                 now,
@@ -241,7 +255,8 @@ def get_project(project_id: str) -> Optional[ProjectRead]:
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT id, title, initial_request, status, current_phase, created_at, updated_at
+            SELECT id, title, initial_request, document_type, status, current_phase,
+                   created_at, updated_at
             FROM projects
             WHERE id = ?
             """,
@@ -254,18 +269,24 @@ def get_project(project_id: str) -> Optional[ProjectRead]:
 
 
 def update_project(
-    project_id: str, title: str | None = None, initial_request: str | None = None
+    project_id: str,
+    title: str | None = None,
+    initial_request: str | None = None,
+    document_type: str | None = None,
 ) -> Optional[ProjectRead]:
-    """Edit the project's title and/or initial request.
+    """Edit the project's title, initial request, and/or document type.
 
-    An edited request changes the document inputs, so the input cutoff is bumped
-    to regenerate downstream artifacts on the next run (old versions are kept).
+    An edited request or document type changes the document inputs, so the
+    input cutoff is bumped to regenerate downstream artifacts on the next run
+    (old versions are kept). document_type "auto" clears the stored type so
+    the next run re-classifies it.
     """
-    if get_project(project_id) is None:
+    project = get_project(project_id)
+    if project is None:
         return None
 
     fields: list[str] = []
-    params: list[str] = []
+    params: list[str | None] = []
     if title is not None:
         fields.append("title = ?")
         params.append(title)
@@ -273,6 +294,11 @@ def update_project(
     if request_changed:
         fields.append("initial_request = ?")
         params.append(initial_request)
+    new_type = None if document_type == "auto" else document_type
+    type_changed = document_type is not None and new_type != project.document_type
+    if type_changed:
+        fields.append("document_type = ?")
+        params.append(new_type)
 
     now = utc_now_iso()
     if fields:
@@ -284,7 +310,7 @@ def update_project(
                 f"UPDATE projects SET {', '.join(fields)} WHERE id = ?",
                 params,
             )
-    if request_changed:
+    if request_changed or type_changed:
         mark_project_inputs_changed(project_id)
     return get_project(project_id)
 
@@ -293,7 +319,8 @@ def list_projects() -> List[ProjectRead]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, title, initial_request, status, current_phase, created_at, updated_at
+            SELECT id, title, initial_request, document_type, status, current_phase,
+                   created_at, updated_at
             FROM projects
             ORDER BY created_at DESC
             """
@@ -1589,7 +1616,9 @@ def _numbered_title(item: Dict[str, Any]) -> str:
     return title
 
 
-def _ensure_markdown_heading_number(markdown: str, section: Dict[str, Any]) -> str:
+def _ensure_markdown_heading_number(
+    markdown: str, section: Dict[str, Any], numbered: bool = True
+) -> str:
     section_id = str(section.get("id") or "").strip()
     if not section_id:
         return markdown
@@ -1600,13 +1629,21 @@ def _ensure_markdown_heading_number(markdown: str, section: Dict[str, Any]) -> s
         if not stripped:
             continue
         if stripped.startswith("#"):
+            if not numbered:
+                # Types without numbered headings keep the writer's heading
+                # as-is, minus any id the model added anyway.
+                marker, _, title = stripped.partition(" ")
+                if title.startswith(f"{section_id} "):
+                    lines[index] = f"{marker} {title[len(section_id) + 1 :]}".rstrip()
+                return "\n".join(lines)
             marker, _, title = stripped.partition(" ")
             if not title.startswith(f"{section_id} "):
                 lines[index] = f"{marker} {section_id} {title}".rstrip()
             return "\n".join(lines)
 
         depth = min(max(_int_or_default(section.get("depth"), 2), 2), 6)
-        heading = f"{'#' * depth} {_numbered_title(section)}"
+        title = _numbered_title(section) if numbered else str(section.get("title") or "Section")
+        heading = f"{'#' * depth} {title}"
         return "\n".join([heading, "", markdown])
     return markdown
 
@@ -1844,11 +1881,15 @@ def _local_merge(
     used_sources: list[Dict[str, Any]] | None = None,
     citation_style: str = "numeric",
     accessed_at: str | None = None,
+    profile: Dict[str, Any] | None = None,
 ) -> str:
+    profile = profile or get_doc_type_profile(None)
+    numbered = bool(profile.get("numbered_headings", True))
     draft_by_id = {
         str((item.get("section") or {}).get("id", "")): _ensure_markdown_heading_number(
             str(item.get("markdown", "")).strip(),
             item.get("section") or {},
+            numbered=numbered,
         )
         for item in section_drafts
         if str(item.get("markdown", "")).strip()
@@ -1860,7 +1901,8 @@ def _local_merge(
         if node_id in draft_by_id:
             return [draft_by_id[node_id]]
         heading_level = min(max(depth, 2), 6)
-        parts = [f"{'#' * heading_level} {_numbered_title(node)}"]
+        title = _numbered_title(node) if numbered else str(node.get("title") or "Section")
+        parts = [f"{'#' * heading_level} {title}"]
         for child in children:
             if isinstance(child, dict):
                 parts.extend(render_node(child, depth + 1))
@@ -1878,11 +1920,15 @@ def _local_merge(
 
     # Number the source list from the sources actually cited inline so [n]
     # markers and the "Sources" entries always agree; fall back to the raw
-    # research results only when nothing was cited.
-    sources = used_sources or (research.get("results", []) if research else [])
-    sources_section = format_sources_section(
-        sources, style=citation_style, accessed_at=accessed_at
-    )
+    # research results only when nothing was cited. Types without citations
+    # (essays, scripts) get no Sources section at all.
+    if profile.get("citations_enabled", True):
+        sources = used_sources or (research.get("results", []) if research else [])
+        sources_section = format_sources_section(
+            sources, style=citation_style, accessed_at=accessed_at
+        )
+    else:
+        sources_section = ""
     return f"# {project.title}\n\n{body}{sources_section}"
 
 
@@ -1935,6 +1981,7 @@ def _reexpand_section_plan(
     section_plan: Dict[str, Any],
     review: Dict[str, Any],
     nodes_to_expand: list,
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
     outline_tree = section_plan.get("outline_tree") or []
     chapter_ids = {
@@ -1960,7 +2007,8 @@ def _reexpand_section_plan(
             )
             try:
                 children, usage = expand_chapter_subtree(
-                    project, brief, chapter, other_titles, feedback=feedback
+                    project, brief, chapter, other_titles, feedback=feedback,
+                    profile=profile,
                 )
             except LLMError:
                 # Applying the review is best-effort; keep the original chapter.
@@ -1989,7 +2037,9 @@ def _draft_conditions(project_id: str) -> Dict[str, Any]:
         model = get_active_llm_config().get("model") or settings.llm_model
     except Exception:
         model = settings.llm_model
+    project = get_project(project_id)
     return {
+        "document_type": project.document_type if project else None,
         "search_enabled": effective_search_enabled(project_id),
         "section_search_enabled": effective_section_search_enabled(project_id),
         "citation_style": effective_citation_style(project_id),
@@ -2068,6 +2118,27 @@ def run_document_generation(
         )
 
     agent_name = "llm_pipeline_writer" if settings.llm_enabled else "local_pipeline_writer"
+
+    # Resolve the document type before anything that consumes its profile
+    # (intake questions, research default, prompts). Classification is
+    # best-effort: on failure the run continues with the report profile and
+    # the type stays unset for the next attempt.
+    classified_type: str | None = None
+    classify_usage: dict[str, Any] | None = None
+    if settings.llm_enabled and not project.document_type:
+        try:
+            classified_type, classify_usage = classify_document_type(project)
+        except LLMError:
+            classified_type, classify_usage = None, None
+        if classified_type:
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE projects SET document_type = ?, updated_at = ? WHERE id = ?",
+                    (classified_type, utc_now_iso(), project_id),
+                )
+            project = get_project(project_id) or project
+    profile = get_doc_type_profile(project.document_type)
+
     # Outline-approval answers are process control, not document content:
     # they must not feed prompts or invalidate cached artifacts. Section
     # feedback is applied per-section in the feedback_revision stage, so it
@@ -2102,13 +2173,24 @@ def run_document_generation(
             project_id,
             agent_name,
             "intake",
-            {"title": project.title, "initial_request": project.initial_request},
+            {
+                "title": project.title,
+                "initial_request": project.initial_request,
+                "document_type": project.document_type,
+            },
         )
         try:
-            planned_questions, question_usage = plan_user_questions(project, decisions)
+            planned_questions, question_usage = plan_user_questions(
+                project, decisions, profile=profile
+            )
         except LLMError as exc:
             fail(run_id, "intake", exc)
             raise WorkflowRunFailedError(str(exc)) from exc
+        if classify_usage is not None:
+            question_usage = {
+                "questions": question_usage,
+                "classification": classify_usage,
+            }
 
         if planned_questions:
             question_ids: list[str] = []
@@ -2173,9 +2255,19 @@ def run_document_generation(
             project_id,
             agent_name,
             "intake",
-            {"decision_count": len(decisions), "llm_enabled": settings.llm_enabled},
+            {
+                "decision_count": len(decisions),
+                "llm_enabled": settings.llm_enabled,
+                "document_type": project.document_type,
+            },
         )
-        _complete_agent_run(run_id, {"skipped_question_planning": True})
+        _complete_agent_run(
+            run_id,
+            {"skipped_question_planning": True},
+            token_usage=(
+                {"classification": classify_usage} if classify_usage else None
+            ),
+        )
 
     try:
         research_artifact = _latest_artifact(project_id, "research_sources")
@@ -2289,7 +2381,7 @@ def run_document_generation(
         else:
             run_id = _start_agent_run(project_id, agent_name, "brief", {})
             if settings.llm_enabled:
-                brief, usage = generate_brief(project, decisions, research)
+                brief, usage = generate_brief(project, decisions, research, profile=profile)
             else:
                 brief, usage = _local_brief(project, decisions, research), None
             with get_connection() as conn:
@@ -2318,7 +2410,7 @@ def run_document_generation(
         else:
             run_id = _start_agent_run(project_id, agent_name, "outline", {"brief": brief})
             if settings.llm_enabled:
-                outline, usage = generate_outline(project, brief)
+                outline, usage = generate_outline(project, brief, profile=profile)
             else:
                 outline, usage = _local_outline(project, brief), None
             with get_connection() as conn:
@@ -2491,7 +2583,7 @@ def run_document_generation(
             )
             if settings.llm_enabled:
                 section_plan, usage = generate_section_plan(
-                    project, brief, outline, research
+                    project, brief, outline, research, profile=profile
                 )
             else:
                 section_plan, usage = _local_section_plan(outline), None
@@ -2554,7 +2646,8 @@ def run_document_generation(
             nodes_to_expand = section_plan_review.get("nodes_to_expand")
             if settings.llm_enabled and isinstance(nodes_to_expand, list) and nodes_to_expand:
                 revised_plan, revise_usage = _reexpand_section_plan(
-                    project, brief, section_plan, section_plan_review, nodes_to_expand
+                    project, brief, section_plan, section_plan_review, nodes_to_expand,
+                    profile=profile,
                 )
                 if revised_plan is not None:
                     section_plan = _normalize_section_plan(revised_plan)
@@ -2794,6 +2887,7 @@ def run_document_generation(
                         feedback=section_feedback,
                         chapter_digests=chapter_digests,
                         glossary=glossary,
+                        profile=profile,
                     )
                 else:
                     markdown, usage = _local_section_draft(
@@ -2802,7 +2896,9 @@ def run_document_generation(
                     summary = _local_section_summary(section, markdown)
                 if usage is not None:
                     writing_usage.append(usage)
-                markdown = _ensure_markdown_heading_number(markdown, section)
+                markdown = _ensure_markdown_heading_number(
+                    markdown, section, numbered=profile.get("numbered_headings", True)
+                )
                 draft_content = {
                     "section": section,
                     "markdown": markdown,
@@ -2951,7 +3047,9 @@ def run_document_generation(
                         f"{draft.get('markdown', '')}\n\nUser feedback applied:\n{notes}",
                         None,
                     )
-                markdown = _ensure_markdown_heading_number(markdown, section)
+                markdown = _ensure_markdown_heading_number(
+                    markdown, section, numbered=profile.get("numbered_headings", True)
+                )
                 draft_content = {
                     "section": section,
                     "markdown": markdown,
@@ -3139,16 +3237,22 @@ def run_document_generation(
             # remap those local markers onto one global numbering (and real
             # links) before merging. Drafts revived from revision artifacts may
             # lack the stored source list; recompute it the same way section
-            # writing did.
+            # writing did. Types without citations get empty source lists,
+            # which makes render_citations strip any stray [n] markers.
+            citations_enabled = bool(profile.get("citations_enabled", True))
             renumbered_drafts, used_sources = render_citations(
                 [
                     {
                         "section": draft["section"],
                         "markdown": draft["markdown"],
-                        "sources": draft.get("sources")
-                        or _sources_for_section(
-                            draft.get("section") or {}, chapter_sources, research
-                        ),
+                        "sources": (
+                            draft.get("sources")
+                            or _sources_for_section(
+                                draft.get("section") or {}, chapter_sources, research
+                            )
+                        )
+                        if citations_enabled
+                        else [],
                     }
                     for draft in section_drafts
                 ],
@@ -3179,6 +3283,7 @@ def run_document_generation(
                 used_sources,
                 citation_style,
                 accessed_at=research_cutoff,
+                profile=profile,
             )
             final_content = {
                 "format": "markdown",

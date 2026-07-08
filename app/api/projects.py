@@ -26,6 +26,7 @@ from app.schemas.projects import (
     ProjectUpdate,
     ReferenceUrlsCreate,
 )
+from app.services.doc_types import get_doc_type_profile
 from app.services.references import (
     MAX_FILE_BYTES,
     MAX_REFERENCE_COUNT,
@@ -57,9 +58,15 @@ def get_project_endpoint(project_id: str) -> ProjectRead:
 
 @router.patch("/{project_id}", response_model=ProjectRead)
 def update_project_endpoint(project_id: str, payload: ProjectUpdate) -> ProjectRead:
-    if payload.title is None and payload.initial_request is None:
+    if (
+        payload.title is None
+        and payload.initial_request is None
+        and payload.document_type is None
+    ):
         raise HTTPException(status_code=422, detail="No fields to update")
-    project = update_project(project_id, payload.title, payload.initial_request)
+    project = update_project(
+        project_id, payload.title, payload.initial_request, payload.document_type
+    )
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
@@ -67,14 +74,20 @@ def update_project_endpoint(project_id: str, payload: ProjectUpdate) -> ProjectR
 
 @router.get("/{project_id}/settings", response_model=ProjectSettingsRead)
 def get_project_settings_endpoint(project_id: str) -> ProjectSettingsRead:
-    _require_project(project_id)
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    profile = get_doc_type_profile(project.document_type)
     stored = get_project_settings(project_id)
     return ProjectSettingsRead(
         search_enabled=stored.get("search_enabled"),
         section_search_enabled=stored.get("section_search_enabled"),
         citation_style=stored.get("citation_style"),
         defaults={
-            "search_enabled": settings.search_enabled,
+            # "Use default" resolves through the document-type profile, so
+            # the UI shows what this project would actually do.
+            "search_enabled": settings.search_enabled
+            and bool(profile.get("research_default", True)),
             "section_search_enabled": settings.section_search_enabled,
             "citation_style": settings.citation_style,
         },
