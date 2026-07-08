@@ -515,6 +515,7 @@ def plan_user_questions(
     system_prompt = (
         "You are an intake agent for a document writing workflow. "
         "Ask only questions that would materially improve the document. "
+        "Always write questions in the same language as the user's request. "
         "Return only one valid JSON object. Do not wrap the response in markdown."
     )
     user_prompt = f"""
@@ -531,6 +532,9 @@ Decide whether more user input is needed before writing.
 Ask at most 5 questions. Do not ask questions already answered above.
 Ask about what matters for this document type (audience, occasion, scope,
 register, target length) rather than generic details.
+Write every "question" and "reason" value in the SAME LANGUAGE as the initial
+request above (a Korean request gets Korean questions), regardless of the
+language of these instructions.
 If the request is already clear enough for a useful first draft, return no questions.
 
 Return this exact JSON shape:
@@ -776,6 +780,10 @@ Set "target_length_chars" to the total body length in characters ONLY when the
 request or answers state one (e.g. "3000자" -> 3000, "A4 2장" -> about 3600).
 Use null when no length was specified. Never invent a length.
 
+Write every string value in the SAME LANGUAGE as the initial request above
+(a Korean request gets a Korean brief), regardless of the language of these
+instructions. Keep the JSON keys in English exactly as shown.
+
 Return this JSON shape:
 {{
   "topic": "",
@@ -820,7 +828,11 @@ Project title:
 Brief JSON:
 {json.dumps(brief, ensure_ascii=False)}
 {_type_block(profile, "outline_guidance")}{_length_block(doc_target)}
-Create a high-level outline. Return this JSON shape:
+Create a high-level outline. Write every title and purpose in the
+SAME LANGUAGE as the brief's topic and goal (a Korean brief gets Korean
+chapter titles), regardless of the language of these instructions.
+
+Return this JSON shape:
 {{
   "chapters": [
     {{
@@ -949,6 +961,8 @@ Sections already planned in other chapters (do NOT repeat these topics):
 Expand only this chapter into subtopics. If a subtopic is still broad, give it
 children. Stop when leaf nodes are narrow enough to write in one focused call.
 Do not include sibling chapters. Do not include the final article text.
+Write every title, purpose, and key point in the SAME LANGUAGE as the chapter
+title above, regardless of the language of these instructions.
 
 Return this JSON shape:
 {{
