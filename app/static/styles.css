@@ -95,6 +95,22 @@
   --heading-weight: 700;
 }
 
+/*
+ * Button sizing scale (theme-independent). Every button is one of three sizes:
+ *   - default  : standalone actions (Start Writing, Save, Export, topbar…)
+ *   - small     : dense inline/list actions (tabs, rerun, version list…)
+ *   - icon/ghost: square icon buttons and borderless ✕ delete buttons
+ * Pick one of these instead of ad-hoc padding so heights stay consistent.
+ */
+:root {
+  --btn-pad: 9px 14px;
+  --btn-pad-sm: 6px 12px;
+  --btn-pad-icon: 6px 11px;
+  --btn-radius: 10px;
+  --btn-radius-sm: 8px;
+  --btn-font-sm: 13px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -125,12 +141,12 @@ select {
 
 button {
   border: var(--outline);
-  border-radius: 10px;
+  border-radius: var(--btn-radius);
   background: var(--accent);
   color: var(--accent-text);
   cursor: pointer;
   font-weight: 700;
-  padding: 9px 14px;
+  padding: var(--btn-pad);
   box-shadow: var(--shadow-small);
   transition: transform 80ms ease, box-shadow 80ms ease;
 }
@@ -217,6 +233,19 @@ label {
   gap: 10px;
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .language-picker {
   display: flex;
   align-items: center;
@@ -272,9 +301,23 @@ label {
   padding: 16px;
 }
 
+/* Collapsible sidebar: on wide screens collapsing frees the full width for
+ * the main pane; on narrow screens the sidebar becomes an overlay drawer. */
+.app-shell.sidebar-collapsed .workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell.sidebar-collapsed .sidebar {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
 .sidebar-head,
 .section-head,
-.hero-panel,
+.hero-top,
 .detail-actions,
 .inline-controls {
   display: flex;
@@ -350,8 +393,8 @@ label {
   color: var(--muted);
   font-size: 14px;
   line-height: 1;
-  padding: 8px;
-  border-radius: 8px;
+  padding: 6px 8px;
+  border-radius: var(--btn-radius-sm);
   box-shadow: none;
 }
 
@@ -367,7 +410,6 @@ label {
 
 .hero-panel,
 .next-action,
-.request-panel,
 .progress-panel,
 .draft-panel,
 .tabs-panel,
@@ -400,17 +442,41 @@ label {
 }
 
 .next-action {
-  border-left: 10px solid var(--blue);
+  border-left: 6px solid var(--blue);
   margin-bottom: 14px;
-  padding: 14px 16px;
+  padding: 10px 14px;
 }
 
-.request-panel {
-  margin-bottom: 14px;
-  padding: 12px 16px;
+.next-action-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
 }
 
-.request-panel summary {
+.next-action-head .eyebrow {
+  margin: 0;
+}
+
+.next-action-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.next-action-head p:not(.eyebrow) {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hero-request {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: var(--border-thin);
+}
+
+.hero-request summary {
   cursor: pointer;
   display: flex;
   align-items: baseline;
@@ -458,6 +524,61 @@ label {
 .reference-item .reference-error {
   color: var(--danger);
   font-size: 12px;
+}
+
+.reference-item .reference-delete {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: var(--btn-radius-sm);
+  box-shadow: none;
+}
+
+.reference-item .reference-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.reference-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ref-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ref-add-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ref-add-row button {
+  flex: none;
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.settings-row label {
+  flex: 1;
+  min-width: 180px;
+}
+
+.settings-row select {
+  width: 100%;
 }
 
 .next-action.needs-answer {
@@ -546,6 +667,37 @@ label {
 .progress-step span {
   display: block;
   margin-top: 4px;
+}
+
+.step-subprogress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.step-subtrack {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--input-bg);
+  border: var(--border-thin);
+}
+
+.step-subfill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--progress-fill);
+  transition: width 200ms ease;
+}
+
+.step-subcount {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .progress-step.completed {
@@ -666,6 +818,64 @@ label {
   font-family: ui-monospace, SFMono-Regular, Consolas, "D2Coding", monospace;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.version-list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px;
+  border: var(--border-thin);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.version-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: var(--border-thin);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px 10px;
+}
+
+.version-item.viewing {
+  border-color: var(--blue);
+}
+
+.version-meta {
+  min-width: 0;
+}
+
+.version-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.version-restored {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.version-meta .item-meta {
+  margin: 2px 0 0;
+}
+
+.version-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.version-actions button {
+  padding: var(--btn-pad-sm);
+  font-size: var(--btn-font-sm);
+  border-radius: var(--btn-radius-sm);
 }
 
 .markdown-body {
@@ -879,6 +1089,38 @@ label {
   color: var(--accent-text);
 }
 
+.details-section > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-family: var(--heading-font);
+  font-weight: var(--heading-weight);
+  font-size: 17px;
+  letter-spacing: 0.03em;
+}
+
+.details-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.details-section > summary::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 14px;
+  transition: transform 120ms ease;
+}
+
+.details-section[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.details-section > summary + * {
+  margin-top: 14px;
+}
+
 .tabs {
   display: flex;
   gap: 6px;
@@ -890,7 +1132,9 @@ label {
 .tab-button {
   background: var(--surface);
   color: var(--muted);
-  padding: 8px 12px;
+  padding: var(--btn-pad-sm);
+  font-size: var(--btn-font-sm);
+  border-radius: var(--btn-radius-sm);
   box-shadow: none;
   border: var(--border-thin);
 }
@@ -937,8 +1181,9 @@ label {
 
 .rerun-step {
   flex: 0 0 auto;
-  padding: 7px 9px;
-  font-size: 12px;
+  padding: var(--btn-pad-sm);
+  font-size: var(--btn-font-sm);
+  border-radius: var(--btn-radius-sm);
 }
 
 .item-title,
@@ -1142,24 +1387,134 @@ label {
   display: none !important;
 }
 
+.modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-width: min(520px, calc(100vw - 32px));
+  color: var(--text);
+}
+
+.modal::backdrop {
+  background: rgba(26, 26, 26, 0.45);
+}
+
+.modal-card {
+  border: var(--outline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin: 0;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-head h3 {
+  margin: 0;
+}
+
+.icon-button {
+  border: var(--border-thin);
+  border-radius: var(--btn-radius);
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1;
+  padding: var(--btn-pad-icon);
+  font-weight: 700;
+}
+
+.modal-sub {
+  margin: 4px 0 6px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.modal-note {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.modal-result {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border: var(--border-thin);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  font-weight: 700;
+  font-size: 0.9em;
+  word-break: break-word;
+}
+
+.modal-result.ok {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+}
+
+.modal-result.error {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
 @media (max-width: 920px) {
   .workspace {
     grid-template-columns: 1fr;
   }
 
+  /* The main pane always spans full width; the sidebar slides in over it. */
+  .app-shell.sidebar-collapsed .workspace {
+    grid-template-columns: 1fr;
+  }
+
   .sidebar {
-    border-right: 0;
-    border-bottom: var(--outline);
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    width: min(320px, 84vw);
+    overflow-y: auto;
+    border-right: var(--outline);
+    box-shadow: var(--shadow);
+    transform: translateX(0);
+    transition: transform 200ms ease;
   }
 
-  .project-list {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(240px, 78vw);
-    overflow-x: auto;
-    padding-bottom: 4px;
+  /* Keep the drawer in the DOM so it can slide, overriding the desktop
+   * `display: none` collapse rule. */
+  .app-shell.sidebar-collapsed .sidebar {
+    display: block;
+    transform: translateX(-100%);
   }
 
-  .hero-panel {
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(26, 26, 26, 0.4);
+  }
+
+  .app-shell.sidebar-collapsed .sidebar-backdrop {
+    display: none;
+  }
+
+  .hero-top {
     align-items: stretch;
     flex-direction: column;
   }

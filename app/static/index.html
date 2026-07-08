@@ -22,10 +22,20 @@
   </head>
   <body>
     <div class="app-shell">
+      <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
       <header class="topbar">
-        <div>
-          <h1 data-i18n="appTitle">LLM Document Agent</h1>
-          <p id="healthText" data-i18n="checkingApi">Checking API status</p>
+        <div class="topbar-left">
+          <button
+            id="sidebarToggle"
+            type="button"
+            class="icon-button sidebar-toggle"
+            aria-label="Toggle projects sidebar"
+            aria-expanded="true"
+          >☰</button>
+          <div>
+            <h1 data-i18n="appTitle">LLM Document Agent</h1>
+            <p id="healthText" data-i18n="checkingApi">Checking API status</p>
+          </div>
         </div>
         <div class="topbar-actions">
           <label class="language-picker">
@@ -42,6 +52,7 @@
               <option value="ko">한국어</option>
             </select>
           </label>
+          <button id="llmSettingsButton" type="button" class="secondary" data-i18n="llmSettings">LLM Settings</button>
           <button id="refreshButton" type="button" class="secondary" data-i18n="refresh">Refresh</button>
         </div>
       </header>
@@ -87,37 +98,90 @@
 
           <div id="projectDetail" class="hidden">
             <section class="hero-panel" aria-label="Current project">
-              <div class="hero-copy">
-                <p class="eyebrow" data-i18n="currentProject">Current Project</p>
-                <h2 id="detailTitle"></h2>
-                <p id="detailMeta"></p>
+              <div class="hero-top">
+                <div class="hero-copy">
+                  <p class="eyebrow" data-i18n="currentProject">Current Project</p>
+                  <h2 id="detailTitle"></h2>
+                  <p id="detailMeta"></p>
+                </div>
+                <div class="hero-actions">
+                  <span id="detailStatus" class="status-pill"></span>
+                  <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
+                  <button id="cancelButton" type="button" class="danger hidden" data-i18n="cancelWriting">Cancel writing</button>
+                  <button id="deleteProjectButton" type="button" class="danger" data-i18n="delete">Delete</button>
+                </div>
               </div>
-              <div class="hero-actions">
-                <span id="detailStatus" class="status-pill"></span>
-                <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
-                <button id="deleteProjectButton" type="button" class="danger" data-i18n="delete">Delete</button>
-              </div>
-            </section>
 
-            <section class="request-panel" aria-label="Initial request">
-              <details id="requestDetails">
+              <details id="requestDetails" class="hero-request">
                 <summary>
                   <span class="eyebrow" data-i18n="initialRequest">Initial request</span>
                   <span id="requestSummaryPreview" class="request-summary-preview"></span>
                 </summary>
-                <p id="detailRequest" class="request-text"></p>
+
+                <div id="requestView">
+                  <p id="detailRequest" class="request-text"></p>
+                  <div class="inline-controls">
+                    <button type="button" id="editRequestButton" class="secondary" data-i18n="editRequest">Edit request</button>
+                  </div>
+                </div>
+
+                <form id="requestEditForm" class="form-stack compact hidden">
+                  <label>
+                    <span data-i18n="title">Title</span>
+                    <input id="editProjectTitle" maxlength="200" required />
+                  </label>
+                  <label>
+                    <span data-i18n="initialRequest">Initial request</span>
+                    <textarea id="editProjectRequest" rows="4" required></textarea>
+                  </label>
+                  <div class="answer-batch-actions">
+                    <button type="submit" data-i18n="save">Save</button>
+                    <button type="button" id="cancelRequestEdit" class="secondary" data-i18n="cancel">Cancel</button>
+                  </div>
+                </form>
+
                 <h4 class="references-title" data-i18n="references">References</h4>
                 <div id="referenceList" class="reference-list"></div>
+                <div class="reference-controls">
+                  <div class="ref-add-row">
+                    <input id="addReferenceUrl" type="url" placeholder="https://" />
+                    <button type="button" id="addReferenceUrlButton" class="secondary" data-i18n="addUrl">Add URL</button>
+                  </div>
+                  <div class="ref-add-row">
+                    <input id="addReferenceFiles" type="file" multiple accept=".txt,.md,.markdown" />
+                    <button type="button" id="addReferenceFilesButton" class="secondary" data-i18n="addFile">Add File</button>
+                  </div>
+                </div>
+
+                <h4 class="references-title" data-i18n="runConditions">Run conditions</h4>
+                <div class="settings-row">
+                  <label>
+                    <span data-i18n="externalSearch">External search</span>
+                    <select id="searchEnabledSelect">
+                      <option value="default" data-i18n="useDefault">Use default</option>
+                      <option value="on" data-i18n="on">On</option>
+                      <option value="off" data-i18n="off">Off</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span data-i18n="sectionSearch">Section top-up search</span>
+                    <select id="sectionSearchSelect">
+                      <option value="default" data-i18n="useDefault">Use default</option>
+                      <option value="on" data-i18n="on">On</option>
+                      <option value="off" data-i18n="off">Off</option>
+                    </select>
+                  </label>
+                </div>
               </details>
             </section>
 
             <section id="nextAction" class="next-action" aria-live="polite">
-              <div>
+              <div class="next-action-head">
                 <p class="eyebrow" data-i18n="nextAction">Next Action</p>
                 <h3 id="nextActionTitle" data-i18n="ready">Ready</h3>
                 <p id="nextActionBody" data-i18n="readyBody">Start the writing pipeline when you are ready.</p>
-                <div id="nextActionItems" class="next-action-items hidden"></div>
               </div>
+              <div id="nextActionItems" class="next-action-items hidden"></div>
             </section>
 
             <section class="progress-panel" aria-label="Writing progress">
@@ -136,18 +200,23 @@
                 <h3 data-i18n="draftPreview">Draft Preview</h3>
                 <div class="inline-controls">
                   <span id="draftStatus" data-i18n="noDraft">No draft</span>
+                  <button id="versionsButton" type="button" class="secondary" data-i18n="versions">Versions</button>
                   <button id="formViewButton" type="button" class="secondary" data-i18n="formView">Form View</button>
                   <button id="draftViewToggle" type="button" class="secondary" data-i18n="raw">Raw</button>
                   <button id="exportButton" type="button" class="secondary" data-i18n="export">Export</button>
                 </div>
               </div>
+              <div id="versionList" class="version-list hidden" aria-label="Draft versions"></div>
               <div id="draftViewer" class="draft-viewer">
                 <aside id="draftToc" class="draft-toc hidden" aria-label="Draft table of contents"></aside>
                 <div id="draftPreview" class="draft-preview markdown-body" data-i18n="draftEmpty">Run the pipeline to generate a draft.</div>
               </div>
             </section>
 
-            <section class="tabs-panel" aria-label="Project details">
+            <details id="detailsSection" class="tabs-panel details-section" aria-label="Project details">
+              <summary class="details-summary">
+                <span data-i18n="details">Details</span>
+              </summary>
               <div class="tabs" role="tablist" aria-label="Project detail tabs">
                 <button id="questionsTab" class="tab-button active" type="button" data-tab="questions" role="tab" data-i18n="questions">Questions</button>
                 <button id="artifactsTab" class="tab-button" type="button" data-tab="artifacts" role="tab" data-i18n="artifacts">Artifacts</button>
@@ -217,11 +286,51 @@
                 </div>
                 <div id="pipelineList" class="list" aria-live="polite"></div>
               </div>
-            </section>
+            </details>
           </div>
         </section>
       </main>
     </div>
+
+    <dialog id="llmSettingsModal" class="modal">
+      <form method="dialog" class="modal-card form-stack" id="llmSettingsForm">
+        <div class="modal-head">
+          <h3 data-i18n="llmSettingsTitle">LLM Provider</h3>
+          <button type="button" id="llmSettingsClose" class="icon-button" aria-label="Close">✕</button>
+        </div>
+        <p class="modal-sub" data-i18n="llmSettingsSub">
+          Choose which model backend the writing pipeline uses.
+        </p>
+
+        <label>
+          <span data-i18n="provider">Provider</span>
+          <select id="llmProvider" aria-label="Provider"></select>
+        </label>
+
+        <label id="llmBaseUrlRow">
+          <span data-i18n="baseUrl">Base URL</span>
+          <input id="llmBaseUrl" type="text" placeholder="http://localhost:8088/v1" />
+        </label>
+
+        <label id="llmApiKeyRow">
+          <span data-i18n="apiKey">API Key</span>
+          <input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+        </label>
+
+        <label id="llmModelRow">
+          <span data-i18n="model">Model</span>
+          <input id="llmModel" type="text" placeholder="gpt-4o-mini" />
+        </label>
+
+        <p id="llmProviderNote" class="modal-note"></p>
+        <p id="llmTestResult" class="modal-result hidden" aria-live="polite"></p>
+
+        <div class="modal-actions">
+          <button type="button" id="llmTestButton" class="secondary" data-i18n="testConnection">Test connection</button>
+          <button type="button" id="llmSaveButton" data-i18n="save">Save</button>
+        </div>
+      </form>
+    </dialog>
 
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <script src="/ui/vendor/mermaid.min.js"></script>

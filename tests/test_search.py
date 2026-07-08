@@ -188,7 +188,10 @@ def fake_settings(**overrides) -> SimpleNamespace:
 
 class TestSearchWeb:
     def test_disabled_returns_empty(self, monkeypatch):
+        from app.db import repositories
+
         monkeypatch.setattr(search, "settings", fake_settings(search_enabled=False))
+        monkeypatch.setattr(repositories, "effective_search_enabled", lambda project_id: False)
         result = search_web(make_project(), [])
         assert result["enabled"] is False
         assert result["results"] == []
@@ -257,7 +260,10 @@ class TestPlanChapterQueries:
 
 class TestResearchChapters:
     def test_disabled_returns_empty(self, monkeypatch):
+        from app.db import repositories
+
         monkeypatch.setattr(search, "settings", fake_settings(search_enabled=False))
+        monkeypatch.setattr(repositories, "effective_search_enabled", lambda project_id: False)
         result = search.research_chapters(make_project(), {"outline_tree": [{"id": "1", "title": "Intro"}]})
         assert result["enabled"] is False
         assert result["chapters"] == []

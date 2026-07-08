@@ -45,6 +45,13 @@ from app.services.search import (
     search_web,
     summarize_search_sources,
 )
+from app.services.run_control import (
+    clear_cancel,
+    clear_stage_progress,
+    get_stage_progress,
+    is_cancel_requested,
+    set_stage_progress,
+)
 
 
 class QuestionAlreadyAnsweredError(Exception):
@@ -52,6 +59,11 @@ class QuestionAlreadyAnsweredError(Exception):
 
 
 class WorkflowRunFailedError(Exception):
+    pass
+
+
+class WorkflowCancelledError(Exception):
+    """Raised inside a run when the user requested cancellation."""
     pass
 
 
@@ -88,6 +100,93 @@ def _json_loads(value: str | None) -> Dict[str, Any] | None:
     if value is None:
         return None
     return json.loads(value)
+
+
+def get_app_setting(key: str) -> Dict[str, Any] | None:
+    """Read a JSON-valued app setting, or None if unset."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+    if row is None:
+        return None
+    return _json_loads(row["value"])
+
+
+def set_app_setting(key: str, value: Dict[str, Any]) -> None:
+    """Upsert a JSON-valued app setting."""
+    now = utc_now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                           updated_at = excluded.updated_at
+            """,
+            (key, _json_dumps(value), now),
+        )
+
+
+# Per-project overrides for run-affecting flags. A value of None means "use the
+# global env default"; only keys the user explicitly set are stored.
+PROJECT_SETTING_KEYS = ("search_enabled", "section_search_enabled")
+
+
+def get_project_settings(project_id: str) -> Dict[str, Any]:
+    """Stored per-project overrides (empty dict when nothing is set)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM project_settings WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+    if row is None:
+        return {}
+    return _json_loads(row["value"]) or {}
+
+
+def set_project_settings(project_id: str, value: Dict[str, Any]) -> Dict[str, Any]:
+    """Upsert the per-project settings blob and return the stored value."""
+    now = utc_now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO project_settings (project_id, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(project_id) DO UPDATE SET value = excluded.value,
+                                                  updated_at = excluded.updated_at
+            """,
+            (project_id, _json_dumps(value), now),
+        )
+    return value
+
+
+def mark_project_inputs_changed(project_id: str) -> None:
+    """Bump the input cutoff so the next run regenerates downstream artifacts.
+
+    Editing the request, references, or run settings changes the document's
+    inputs. Recording the change time here (and folding it into
+    ``_decision_cutoff``) invalidates stale cached artifacts the same way a new
+    intake answer does — without deleting anything, so old versions survive.
+    """
+    current = get_project_settings(project_id)
+    current["inputs_changed_at"] = utc_now_iso()
+    set_project_settings(project_id, current)
+
+
+def _override_or_default(project_id: str, key: str, default: bool) -> bool:
+    value = get_project_settings(project_id).get(key)
+    return default if value is None else bool(value)
+
+
+def effective_search_enabled(project_id: str) -> bool:
+    return _override_or_default(project_id, "search_enabled", settings.search_enabled)
+
+
+def effective_section_search_enabled(project_id: str) -> bool:
+    return _override_or_default(
+        project_id, "section_search_enabled", settings.section_search_enabled
+    )
 
 
 def _question_text(question_json: str) -> str:
@@ -142,6 +241,42 @@ def get_project(project_id: str) -> Optional[ProjectRead]:
     return ProjectRead(**dict(row))
 
 
+def update_project(
+    project_id: str, title: str | None = None, initial_request: str | None = None
+) -> Optional[ProjectRead]:
+    """Edit the project's title and/or initial request.
+
+    An edited request changes the document inputs, so the input cutoff is bumped
+    to regenerate downstream artifacts on the next run (old versions are kept).
+    """
+    if get_project(project_id) is None:
+        return None
+
+    fields: list[str] = []
+    params: list[str] = []
+    if title is not None:
+        fields.append("title = ?")
+        params.append(title)
+    request_changed = initial_request is not None
+    if request_changed:
+        fields.append("initial_request = ?")
+        params.append(initial_request)
+
+    now = utc_now_iso()
+    if fields:
+        fields.append("updated_at = ?")
+        params.append(now)
+        params.append(project_id)
+        with get_connection() as conn:
+            conn.execute(
+                f"UPDATE projects SET {', '.join(fields)} WHERE id = ?",
+                params,
+            )
+    if request_changed:
+        mark_project_inputs_changed(project_id)
+    return get_project(project_id)
+
+
 def list_projects() -> List[ProjectRead]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -166,6 +301,7 @@ def delete_project(project_id: str) -> bool:
 
         for table in (
             "project_references",
+            "project_settings",
             "workflow_threads",
             "pending_questions",
             "user_decisions",
@@ -946,6 +1082,10 @@ def _start_agent_run(
     phase: str,
     input_data: Dict[str, Any],
 ) -> str:
+    # Every stage (and every reuse run) starts here, so this is the single
+    # choke point where a cancel request aborts the run at a stage boundary.
+    if is_cancel_requested(project_id):
+        raise WorkflowCancelledError()
     now = utc_now_iso()
     run_id = str(uuid4())
     with get_connection() as conn:
@@ -1162,6 +1302,11 @@ def _invalidate_from_phase(project_id: str, phase: str) -> None:
     if artifact_types is None:
         return
 
+    # Preserve every prior final draft as version history: a forced rerun only
+    # clears intermediate artifacts and then writes a new draft version, so the
+    # old one stays browsable in the version list.
+    artifact_types = [artifact_type for artifact_type in artifact_types if artifact_type != "draft"]
+
     run_phases = [item[0] for item in WORKFLOW_STEPS]
     if phase in run_phases:
         run_phases = run_phases[run_phases.index(phase) :]
@@ -1324,6 +1469,11 @@ def _is_fresh(updated_at: str, cutoff: str) -> bool:
 def _decision_cutoff(project: ProjectRead, decisions: list[UserDecisionRead]) -> str:
     values = [project.created_at]
     values.extend(decision.created_at for decision in decisions)
+    # Editing the request/references/settings records an inputs_changed_at that
+    # must also invalidate stale artifacts, just like a new decision does.
+    changed_at = get_project_settings(project.id).get("inputs_changed_at")
+    if isinstance(changed_at, str) and changed_at:
+        values.append(changed_at)
     return max(values)
 
 
@@ -1811,12 +1961,63 @@ def _reexpand_section_plan(
     return {"outline_tree": new_tree}, {"chapter_calls": usages} if usages else None
 
 
+def _draft_conditions(project_id: str) -> Dict[str, Any]:
+    """Snapshot the generation conditions recorded on each draft version.
+
+    Stored on the draft so the version history can show what changed between
+    runs (search on/off, how many references, which model)."""
+    references = list_project_references(project_id)
+    try:
+        from app.services.llm_settings import get_active_llm_config
+
+        model = get_active_llm_config().get("model") or settings.llm_model
+    except Exception:
+        model = settings.llm_model
+    return {
+        "search_enabled": effective_search_enabled(project_id),
+        "section_search_enabled": effective_section_search_enabled(project_id),
+        "reference_count": len(references),
+        "reference_titles": [(ref.title or ref.source) for ref in references[:8]],
+        "model": model,
+    }
+
+
+def restore_draft_version(project_id: str, artifact_id: str) -> Optional[ArtifactRead]:
+    """Clone an older draft into a new (latest) draft version, non-destructively.
+
+    The chosen version's content is copied into a fresh draft artifact so it
+    becomes the current document while every other version stays intact.
+    """
+    source = get_artifact(project_id, artifact_id)
+    if source is None or source.type != "draft":
+        return None
+    content = dict(source.content or {})
+    content["restored_from"] = source.version
+    now = utc_now_iso()
+    with get_connection() as conn:
+        new_id = _insert_artifact(
+            conn,
+            project_id,
+            "draft",
+            source.title or "Restored draft",
+            content,
+            now,
+            source.node_id,
+        )
+    return get_artifact(project_id, new_id)
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
     project = get_project(project_id)
     if project is None:
         return None
+
+    # Drop any stale control state from a previous aborted attempt so this run
+    # is not cancelled before it starts.
+    clear_cancel(project_id)
+    clear_stage_progress(project_id)
 
     if force_from:
         _invalidate_from_phase(project_id, force_from)
@@ -2497,7 +2698,14 @@ def run_document_generation(
             glossary_counts: dict[str, int] = {}
             current_chapter_id: str | None = None
             chapter_summaries: list[Dict[str, Any]] = []
+            sections_done = 0
+            set_stage_progress(project_id, "section_writing", 0, len(sections))
             for section in sections:
+                # Section writing is the longest phase; check cancel and publish
+                # "n of N" sub-progress on every section, not just at boundaries.
+                if is_cancel_requested(project_id):
+                    raise WorkflowCancelledError()
+                set_stage_progress(project_id, "section_writing", sections_done, len(sections))
                 section_chapter = str(section.get("id", "")).split(".")[0]
                 if (
                     current_chapter_id is not None
@@ -2531,8 +2739,8 @@ def run_document_generation(
                 # Top-up search: when nothing in the research pool matches this
                 # section, one extra targeted search beats writing sourceless.
                 if (
-                    settings.section_search_enabled
-                    and settings.search_enabled
+                    effective_section_search_enabled(project_id)
+                    and effective_search_enabled(project_id)
                     and len(topup_info) < settings.section_search_topup_limit
                     and best_overlap_score(section, section_sources) == 0
                 ):
@@ -2622,6 +2830,8 @@ def run_document_generation(
                     term_text = str(term).strip()
                     if term_text:
                         glossary_counts[term_text] = glossary_counts.get(term_text, 0) + 1
+                sections_done += 1
+                set_stage_progress(project_id, "section_writing", sections_done, len(sections))
             if current_chapter_id is not None and chapter_summaries:
                 digest, usage = _build_chapter_digest(
                     project,
@@ -2663,6 +2873,7 @@ def run_document_generation(
                 },
                 token_usage=token_usage or None,
             )
+            clear_stage_progress(project_id)
 
             run_id = _start_agent_run(
                 project_id,
@@ -2935,7 +3146,11 @@ def run_document_generation(
             final_markdown = _local_merge(
                 project, merge_inputs, research, section_plan, used_sources
             )
-            final_content = {"format": "markdown", "markdown": final_markdown}
+            final_content = {
+                "format": "markdown",
+                "markdown": final_markdown,
+                "conditions": _draft_conditions(project_id),
+            }
             with get_connection() as conn:
                 artifact_ids.append(
                     _insert_artifact(
@@ -3188,6 +3403,8 @@ def get_workflow_progress(project_id: str) -> Optional[WorkflowProgressRead]:
     if project is None:
         return None
 
+    stage_progress = get_stage_progress(project_id) if project.status == "running" else None
+
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -3278,6 +3495,16 @@ def get_workflow_progress(project_id: str) -> Optional[WorkflowProgressRead]:
             artifacts_by_type,
             [dict(summary) for summary in summary_rows],
         )
+        step_progress = None
+        if (
+            status == "running"
+            and stage_progress
+            and stage_progress.get("phase") == phase
+        ):
+            step_progress = {
+                "done": int(stage_progress["done"]),
+                "total": int(stage_progress["total"]),
+            }
         steps.append(
             WorkflowStepRead(
                 phase=phase,
@@ -3287,10 +3514,18 @@ def get_workflow_progress(project_id: str) -> Optional[WorkflowProgressRead]:
                 completed_at=row["completed_at"] if row is not None else inferred_time,
                 error=row["error"] if row is not None else None,
                 details=details,
+                progress=step_progress,
             )
         )
 
-    percent = int((completed_count / len(WORKFLOW_STEPS)) * 100)
+    # A running stage that reports "done of total" contributes a fraction of one
+    # step so the overall bar advances within a long phase, not just between them.
+    running_fraction = 0.0
+    for step in steps:
+        if step.status == "running" and step.progress and step.progress.get("total"):
+            running_fraction = step.progress["done"] / step.progress["total"]
+            break
+    percent = int(((completed_count + running_fraction) / len(WORKFLOW_STEPS)) * 100)
     if project.status == "completed":
         percent = 100
 

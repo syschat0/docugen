@@ -114,6 +114,19 @@ def init_db() -> None:
               FOREIGN KEY (project_id) REFERENCES projects(id)
             );
 
+            CREATE TABLE IF NOT EXISTS app_settings (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS project_settings (
+              project_id TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+
             CREATE TABLE IF NOT EXISTS agent_runs (
               id TEXT PRIMARY KEY,
               project_id TEXT NOT NULL,

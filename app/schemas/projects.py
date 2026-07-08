@@ -6,6 +6,25 @@ class ProjectCreate(BaseModel):
     initial_request: str = Field(min_length=1)
 
 
+class ProjectUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    initial_request: str | None = Field(default=None, min_length=1)
+
+
+class ProjectSettingsUpdate(BaseModel):
+    # None means "use the global default"; a bool is an explicit per-project
+    # override.
+    search_enabled: bool | None = None
+    section_search_enabled: bool | None = None
+
+
+class ProjectSettingsRead(BaseModel):
+    search_enabled: bool | None = None
+    section_search_enabled: bool | None = None
+    # Global env defaults, so the UI can show what "use default" resolves to.
+    defaults: dict[str, bool]
+
+
 class ProjectRead(BaseModel):
     id: str
     title: str

@@ -27,6 +27,8 @@ class WorkflowStepRead(BaseModel):
     completed_at: str | None = None
     error: str | None = None
     details: Dict[str, Any] = Field(default_factory=dict)
+    # {"done": int, "total": int} while an iterative stage is running; else None.
+    progress: Dict[str, int] | None = None
 
 
 class WorkflowProgressRead(BaseModel):

@@ -9,6 +9,7 @@ from app.api.view import router as view_router
 from app.api.artifacts import router as artifacts_router
 from app.api.projects import router as projects_router
 from app.api.questions import router as questions_router
+from app.api.settings import router as settings_router
 from app.api.workflow import router as workflow_router
 from app.core.config import settings
 from app.db.repositories import fail_stale_running_projects
@@ -28,6 +29,7 @@ app.include_router(view_router)
 app.include_router(questions_router)
 app.include_router(artifacts_router)
 app.include_router(workflow_router)
+app.include_router(settings_router)
 
 static_dir = Path(__file__).parent / "static"
 app.mount("/ui", StaticFiles(directory=static_dir, html=True), name="ui")

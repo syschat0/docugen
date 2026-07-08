@@ -5,6 +5,7 @@ import urllib.request
 from typing import Any, Dict
 
 from app.core.config import settings
+from app.services.llm_settings import get_active_llm_config
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
 from app.services.citations import global_citation_numbers
@@ -68,10 +69,6 @@ def _repair_json_text(text: str) -> str:
     return repaired
 
 
-def _chat_completions_url() -> str:
-    return settings.llm_base_url.rstrip("/") + "/chat/completions"
-
-
 def _extract_json_object(text: str) -> Dict[str, Any]:
     cleaned = _strip_json_fence(text)
     balanced = _first_balanced_json_object(cleaned)
@@ -99,19 +96,20 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
 
 
 def _request_chat_completion(messages: list[dict[str, str]]) -> dict[str, Any]:
+    config = get_active_llm_config()
     payload = {
-        "model": settings.llm_model,
+        "model": config["model"],
         "messages": messages,
         "temperature": 0.4,
         "max_tokens": 6000,
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
-        _chat_completions_url(),
+        config["base_url"].rstrip("/") + "/chat/completions",
         data=body,
         method="POST",
         headers={
-            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Authorization": f"Bearer {config['api_key']}",
             "Content-Type": "application/json",
         },
     )

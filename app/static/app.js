@@ -6,10 +6,17 @@ const state = {
   draftView: "rendered",
   language: localStorage.getItem("docugenLanguage") || "en",
   theme: localStorage.getItem("docugenTheme") || "pastel",
+  sidebarCollapsed:
+    (localStorage.getItem("docugenSidebar") ||
+      (window.matchMedia("(max-width: 920px)").matches ? "collapsed" : "open")) ===
+    "collapsed",
   questions: [],
   answerDrafts: {},
   artifacts: [],
   references: [],
+  projectSettings: null,
+  viewDraftId: null,
+  versionsOpen: false,
   progress: null,
 };
 
@@ -39,6 +46,7 @@ const translations = {
     contents: "Contents",
     currentProject: "Current Project",
     delete: "Delete",
+    details: "Details",
     deleteAnswer: "Delete Answer",
     deleteAnswerConfirm: "Delete this answer and make the question pending again?",
     deleteProjectConfirm:
@@ -94,6 +102,33 @@ const translations = {
     references: "References",
     referencesFailed: "Some references could not be loaded: {errors}",
     noReferences: "No references.",
+    editRequest: "Edit request",
+    cancel: "Cancel",
+    addUrl: "Add URL",
+    addFile: "Add File",
+    removeReference: "Remove",
+    runConditions: "Run conditions",
+    externalSearch: "External search",
+    sectionSearch: "Section top-up search",
+    useDefault: "Use default",
+    on: "On",
+    off: "Off",
+    requestUpdated: "Request updated. It will be applied on the next run.",
+    referenceAdded: "Reference added. It will be applied on the next run.",
+    referenceRemoved: "Reference removed. It will be applied on the next run.",
+    settingsSaved: "Run conditions saved. They will be applied on the next run.",
+    enterUrl: "Enter a URL first.",
+    selectFiles: "Choose at least one file.",
+    versions: "Versions",
+    versionHistory: "Version history",
+    viewVersion: "View",
+    restoreVersion: "Restore",
+    restoredToast: "Restored as a new version.",
+    latestBadge: "Latest",
+    restoredFrom: "restored from v{version}",
+    condSearch: "Search",
+    condRefs: "Refs",
+    noVersions: "No versions yet.",
     questionAdded: "Question added.",
     questions: "Questions",
     raw: "Raw",
@@ -101,6 +136,19 @@ const translations = {
     readyBody: "Start the writing pipeline when you are ready.",
     refresh: "Refresh",
     refreshed: "Refreshed.",
+    llmSettings: "LLM Settings",
+    llmSettingsTitle: "LLM Provider",
+    llmSettingsSub: "Choose which model backend the writing pipeline uses.",
+    provider: "Provider",
+    baseUrl: "Base URL",
+    apiKey: "API Key",
+    model: "Model",
+    testConnection: "Test connection",
+    save: "Save",
+    llmSaved: "LLM provider saved.",
+    llmTesting: "Testing connection…",
+    llmTestOk: "Connected. Model: {model}",
+    llmTestFail: "Failed: {error}",
     rendered: "Rendered",
     reranFrom: "Reran from {phase}.",
     rerunConfirm: "Rerun from {phase}? Downstream artifacts will be regenerated.",
@@ -142,6 +190,12 @@ const translations = {
     writingInProgressBody: "The pipeline is moving through brief, outline, section drafts, summaries, and final merge.",
     writerNeedsInput:
       "The writer needs your input before continuing. Answer pending questions, then start writing again.",
+    cancelWriting: "Cancel writing",
+    cancelling: "Cancelling…",
+    cancelRequested: "Cancellation requested. The run will stop at the next step.",
+    cancelled: "Cancelled",
+    runCancelled: "Writing cancelled",
+    runCancelledBody: "The run was cancelled. Start writing again to resume from the last completed step.",
   },
   ko: {
     add: "추가",
@@ -168,6 +222,7 @@ const translations = {
     contents: "목차",
     currentProject: "현재 프로젝트",
     delete: "삭제",
+    details: "상세",
     deleteAnswer: "답변 삭제",
     deleteAnswerConfirm: "이 답변을 삭제하고 질문을 다시 대기 상태로 바꿀까요?",
     deleteProjectConfirm:
@@ -223,6 +278,33 @@ const translations = {
     references: "참고 자료",
     referencesFailed: "일부 참고 자료를 불러오지 못했습니다: {errors}",
     noReferences: "참고 자료가 없습니다.",
+    editRequest: "요청 편집",
+    cancel: "취소",
+    addUrl: "URL 추가",
+    addFile: "파일 추가",
+    removeReference: "삭제",
+    runConditions: "생성 조건",
+    externalSearch: "외부 검색",
+    sectionSearch: "섹션 보강 검색",
+    useDefault: "기본값 사용",
+    on: "켜기",
+    off: "끄기",
+    requestUpdated: "요청을 수정했습니다. 다음 실행 시 반영됩니다.",
+    referenceAdded: "참고 자료를 추가했습니다. 다음 실행 시 반영됩니다.",
+    referenceRemoved: "참고 자료를 삭제했습니다. 다음 실행 시 반영됩니다.",
+    settingsSaved: "생성 조건을 저장했습니다. 다음 실행 시 반영됩니다.",
+    enterUrl: "URL을 입력하세요.",
+    selectFiles: "파일을 하나 이상 선택하세요.",
+    versions: "버전",
+    versionHistory: "버전 이력",
+    viewVersion: "보기",
+    restoreVersion: "복원",
+    restoredToast: "새 버전으로 복원했습니다.",
+    latestBadge: "최신",
+    restoredFrom: "v{version}에서 복원",
+    condSearch: "검색",
+    condRefs: "참조",
+    noVersions: "아직 버전이 없습니다.",
     questionAdded: "질문을 추가했습니다.",
     questions: "질문",
     raw: "원문",
@@ -230,6 +312,19 @@ const translations = {
     readyBody: "준비되면 작성 파이프라인을 시작하세요.",
     refresh: "새로고침",
     refreshed: "새로고침했습니다.",
+    llmSettings: "LLM 설정",
+    llmSettingsTitle: "LLM 프로바이더",
+    llmSettingsSub: "문서 작성 파이프라인이 사용할 모델 백엔드를 선택하세요.",
+    provider: "프로바이더",
+    baseUrl: "Base URL",
+    apiKey: "API 키",
+    model: "모델",
+    testConnection: "연결 테스트",
+    save: "저장",
+    llmSaved: "LLM 프로바이더를 저장했습니다.",
+    llmTesting: "연결 테스트 중…",
+    llmTestOk: "연결 성공. 모델: {model}",
+    llmTestFail: "실패: {error}",
     rendered: "서식 보기",
     reranFrom: "{phase} 단계부터 다시 실행했습니다.",
     rerunConfirm: "{phase} 단계부터 다시 실행할까요? 이후 산출물은 다시 생성됩니다.",
@@ -270,6 +365,12 @@ const translations = {
     writingInProgress: "작성 진행 중",
     writingInProgressBody: "브리프, 목차, 섹션 초안, 요약, 최종 병합 단계가 진행 중입니다.",
     writerNeedsInput: "계속 작성하기 전에 입력이 필요합니다. 대기 중인 질문에 답한 뒤 다시 작성하세요.",
+    cancelWriting: "작성 취소",
+    cancelling: "취소 중…",
+    cancelRequested: "취소를 요청했습니다. 다음 단계에서 중단됩니다.",
+    cancelled: "취소됨",
+    runCancelled: "작성이 취소됨",
+    runCancelledBody: "실행이 취소되었습니다. 다시 작성 시작을 누르면 마지막 완료 단계부터 이어집니다.",
   },
 };
 
@@ -313,9 +414,13 @@ const phaseLabels = {
 const workflowPhases = Object.keys(phaseLabels.en);
 
 const els = {
+  appShell: document.querySelector(".app-shell"),
+  sidebarToggle: document.querySelector("#sidebarToggle"),
+  sidebarBackdrop: document.querySelector("#sidebarBackdrop"),
   healthText: document.querySelector("#healthText"),
   refreshButton: document.querySelector("#refreshButton"),
   runButton: document.querySelector("#runButton"),
+  cancelButton: document.querySelector("#cancelButton"),
   deleteProjectButton: document.querySelector("#deleteProjectButton"),
   newProjectToggle: document.querySelector("#newProjectToggle"),
   projectForm: document.querySelector("#projectForm"),
@@ -326,6 +431,18 @@ const els = {
   requestDetails: document.querySelector("#requestDetails"),
   requestSummaryPreview: document.querySelector("#requestSummaryPreview"),
   detailRequest: document.querySelector("#detailRequest"),
+  requestView: document.querySelector("#requestView"),
+  requestEditForm: document.querySelector("#requestEditForm"),
+  editProjectTitle: document.querySelector("#editProjectTitle"),
+  editProjectRequest: document.querySelector("#editProjectRequest"),
+  editRequestButton: document.querySelector("#editRequestButton"),
+  cancelRequestEdit: document.querySelector("#cancelRequestEdit"),
+  addReferenceUrl: document.querySelector("#addReferenceUrl"),
+  addReferenceUrlButton: document.querySelector("#addReferenceUrlButton"),
+  addReferenceFiles: document.querySelector("#addReferenceFiles"),
+  addReferenceFilesButton: document.querySelector("#addReferenceFilesButton"),
+  searchEnabledSelect: document.querySelector("#searchEnabledSelect"),
+  sectionSearchSelect: document.querySelector("#sectionSearchSelect"),
   referenceList: document.querySelector("#referenceList"),
   projectList: document.querySelector("#projectList"),
   projectCount: document.querySelector("#projectCount"),
@@ -342,6 +459,8 @@ const els = {
   progressFill: document.querySelector("#progressFill"),
   progressSteps: document.querySelector("#progressSteps"),
   draftStatus: document.querySelector("#draftStatus"),
+  versionsButton: document.querySelector("#versionsButton"),
+  versionList: document.querySelector("#versionList"),
   draftViewer: document.querySelector("#draftViewer"),
   draftToc: document.querySelector("#draftToc"),
   draftPreview: document.querySelector("#draftPreview"),
@@ -366,12 +485,57 @@ const els = {
   toast: document.querySelector("#toast"),
   languageSelect: document.querySelector("#languageSelect"),
   themeSelect: document.querySelector("#themeSelect"),
+  llmSettingsButton: document.querySelector("#llmSettingsButton"),
+  llmSettingsModal: document.querySelector("#llmSettingsModal"),
+  llmSettingsClose: document.querySelector("#llmSettingsClose"),
+  llmProvider: document.querySelector("#llmProvider"),
+  llmBaseUrlRow: document.querySelector("#llmBaseUrlRow"),
+  llmBaseUrl: document.querySelector("#llmBaseUrl"),
+  llmApiKeyRow: document.querySelector("#llmApiKeyRow"),
+  llmApiKey: document.querySelector("#llmApiKey"),
+  llmModelRow: document.querySelector("#llmModelRow"),
+  llmModel: document.querySelector("#llmModel"),
+  llmProviderNote: document.querySelector("#llmProviderNote"),
+  llmTestResult: document.querySelector("#llmTestResult"),
+  llmTestButton: document.querySelector("#llmTestButton"),
+  llmSaveButton: document.querySelector("#llmSaveButton"),
 };
+
+const llmSettingsState = { providers: [], active: null, loaded: false };
 
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
   if (els.themeSelect) {
     els.themeSelect.value = state.theme;
+  }
+}
+
+function isNarrowViewport() {
+  return window.matchMedia("(max-width: 920px)").matches;
+}
+
+function applySidebar() {
+  els.appShell?.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+  els.sidebarToggle?.setAttribute("aria-expanded", String(!state.sidebarCollapsed));
+}
+
+function setSidebarCollapsed(collapsed, { persist = true } = {}) {
+  state.sidebarCollapsed = collapsed;
+  if (persist) {
+    localStorage.setItem("docugenSidebar", collapsed ? "collapsed" : "open");
+  }
+  applySidebar();
+}
+
+function toggleSidebar() {
+  setSidebarCollapsed(!state.sidebarCollapsed);
+}
+
+// On narrow screens the sidebar is an overlay drawer, so close it after the
+// user picks a project to reveal the workspace underneath.
+function closeSidebarOnNarrow() {
+  if (isNarrowViewport() && !state.sidebarCollapsed) {
+    setSidebarCollapsed(true, { persist: false });
   }
 }
 
@@ -503,6 +667,21 @@ function latestDraft() {
   return state.artifacts.find((artifact) => artifact.type === "draft") || null;
 }
 
+// All draft versions, newest first (list_artifacts already orders by created_at
+// DESC, and each rerun appends a higher version instead of overwriting).
+function draftVersions() {
+  return state.artifacts.filter((artifact) => artifact.type === "draft");
+}
+
+function currentDraft() {
+  const drafts = draftVersions();
+  if (state.viewDraftId) {
+    const viewed = drafts.find((draft) => draft.id === state.viewDraftId);
+    if (viewed) return viewed;
+  }
+  return drafts[0] || null;
+}
+
 function answerDraftKey(questionId) {
   return `${state.selectedProjectId || "none"}:${questionId}`;
 }
@@ -593,6 +772,7 @@ function renderProjects() {
       `${statusLabel(project.status)} - ${phaseLabel(project.current_phase)} - ${formatDate(project.updated_at)}`;
     item.querySelector(".project-select").addEventListener("click", async () => {
       state.selectedProjectId = project.id;
+      closeSidebarOnNarrow();
       renderProjects();
       await renderSelectedProject();
     });
@@ -636,6 +816,9 @@ async function renderSelectedProject() {
 
   if (!project) return;
 
+  // Always show the latest version after a (re)load; a rerun appends a new one.
+  state.viewDraftId = null;
+
   els.detailTitle.textContent = project.title;
   els.detailMeta.textContent =
     `${phaseLabel(project.current_phase)} - ${t("created")} ${formatDate(project.created_at)} - ${t("updated")} ${formatDate(project.updated_at)}`;
@@ -643,7 +826,13 @@ async function renderSelectedProject() {
   els.detailRequest.textContent = project.initial_request;
   els.requestSummaryPreview.textContent = project.initial_request.split("\n")[0];
 
-  await Promise.all([loadProgress(), loadQuestions(), loadArtifacts(), loadReferences()]);
+  await Promise.all([
+    loadProgress(),
+    loadQuestions(),
+    loadArtifacts(),
+    loadReferences(),
+    loadProjectSettings(),
+  ]);
   renderNextAction();
   renderDraftPreview();
   renderTabs();
@@ -709,7 +898,78 @@ function renderReferences() {
       item.append(error);
     }
 
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "reference-delete";
+    remove.title = t("removeReference");
+    remove.setAttribute("aria-label", t("removeReference"));
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => deleteReference(reference.id));
+    item.append(remove);
+
     els.referenceList.append(item);
+  }
+}
+
+async function deleteReference(referenceId) {
+  const project = selectedProject();
+  if (!project) return;
+  try {
+    await api(`/projects/${project.id}/references/${referenceId}`, { method: "DELETE" });
+    showToast(t("referenceRemoved"));
+    await loadReferences();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function settingToSelectValue(value) {
+  if (value === true) return "on";
+  if (value === false) return "off";
+  return "default";
+}
+
+function selectValueToSetting(value) {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  return null;
+}
+
+async function loadProjectSettings() {
+  const project = selectedProject();
+  if (!project) return;
+  state.projectSettings = await api(`/projects/${project.id}/settings`);
+  renderProjectSettings();
+}
+
+function renderProjectSettings() {
+  const config = state.projectSettings;
+  if (!config) return;
+  if (els.searchEnabledSelect) {
+    els.searchEnabledSelect.value = settingToSelectValue(config.search_enabled);
+  }
+  if (els.sectionSearchSelect) {
+    els.sectionSearchSelect.value = settingToSelectValue(config.section_search_enabled);
+  }
+}
+
+async function saveProjectSettings() {
+  const project = selectedProject();
+  if (!project) return;
+  const payload = {
+    search_enabled: selectValueToSetting(els.searchEnabledSelect.value),
+    section_search_enabled: selectValueToSetting(els.sectionSearchSelect.value),
+  };
+  try {
+    state.projectSettings = await api(`/projects/${project.id}/settings`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    renderProjectSettings();
+    showToast(t("settingsSaved"));
+  } catch (error) {
+    showToast(error.message, true);
+    await loadProjectSettings().catch(() => {});
   }
 }
 
@@ -732,6 +992,19 @@ function renderProgress() {
     `;
     compact.querySelector("strong").textContent = phaseLabel(step.phase, step.label);
     compact.querySelector("span").textContent = `${statusLabel(step.status)} · ${stepDuration(step)}`;
+    if (step.progress && step.progress.total) {
+      const { done, total } = step.progress;
+      const fraction = total ? Math.round((done / total) * 100) : 0;
+      const sub = document.createElement("div");
+      sub.className = "step-subprogress";
+      sub.innerHTML = `
+        <div class="step-subtrack"><div class="step-subfill"></div></div>
+        <span class="step-subcount"></span>
+      `;
+      sub.querySelector(".step-subfill").style.width = `${fraction}%`;
+      sub.querySelector(".step-subcount").textContent = `${done}/${total}`;
+      compact.append(sub);
+    }
     if (step.error) compact.title = step.error;
     els.progressSteps.append(compact);
 
@@ -785,6 +1058,31 @@ function stopRunPolling() {
 function setRunButtonRunning(isRunning) {
   els.runButton.disabled = isRunning;
   els.runButton.textContent = isRunning ? t("writing") : t("startWriting");
+  if (els.cancelButton) {
+    els.cancelButton.classList.toggle("hidden", !isRunning);
+    if (isRunning) {
+      els.cancelButton.disabled = false;
+      els.cancelButton.textContent = t("cancelWriting");
+    }
+  }
+}
+
+async function cancelWritingRun() {
+  const project = selectedProject();
+  if (!project) return;
+  els.cancelButton.disabled = true;
+  els.cancelButton.textContent = t("cancelling");
+  try {
+    await api(`/projects/${project.id}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    showToast(t("cancelRequested"));
+  } catch (error) {
+    showToast(error.message, true);
+    els.cancelButton.disabled = false;
+    els.cancelButton.textContent = t("cancelWriting");
+  }
 }
 
 function startRunPolling() {
@@ -1223,7 +1521,9 @@ function renderArtifacts() {
 }
 
 function renderDraftPreview() {
-  const draft = latestDraft();
+  const draft = currentDraft();
+  renderVersions();
+  updateVersionsVisibility();
   if (!draft) {
     els.draftStatus.textContent = t("noDraft");
     if (els.formViewButton) {
@@ -1240,7 +1540,9 @@ function renderDraftPreview() {
   if (els.formViewButton) {
     els.formViewButton.disabled = false;
   }
-  els.draftStatus.textContent = `v${draft.version}`;
+  const drafts = draftVersions();
+  const isLatest = drafts[0] && draft.id === drafts[0].id;
+  els.draftStatus.textContent = isLatest ? `v${draft.version}` : `v${draft.version} · ${t("viewVersion")}`;
   const markdown = artifactBodyText(draft);
   els.draftViewToggle.textContent = state.draftView === "rendered" ? t("raw") : t("rendered");
   els.draftPreview.classList.toggle("markdown-body", state.draftView === "rendered");
@@ -1258,6 +1560,104 @@ function renderDraftPreview() {
     els.draftToc.innerHTML = "";
     els.draftViewer.classList.add("no-toc");
     els.draftPreview.textContent = markdown;
+  }
+}
+
+function conditionsSummary(conditions) {
+  if (!conditions) return "";
+  const parts = [
+    `${t("condSearch")} ${conditions.search_enabled ? t("on") : t("off")}`,
+    `${t("condRefs")} ${conditions.reference_count ?? 0}`,
+  ];
+  if (conditions.model) parts.push(conditions.model);
+  return parts.join(" · ");
+}
+
+function updateVersionsVisibility() {
+  const drafts = draftVersions();
+  if (els.versionsButton) {
+    els.versionsButton.disabled = drafts.length === 0;
+  }
+  els.versionList.classList.toggle(
+    "hidden",
+    !state.versionsOpen || drafts.length === 0,
+  );
+}
+
+function renderVersions() {
+  const drafts = draftVersions();
+  els.versionList.innerHTML = "";
+  if (drafts.length === 0) {
+    els.versionList.innerHTML = `<p class="item-meta">${escapeHtml(t("noVersions"))}</p>`;
+    return;
+  }
+
+  const viewed = currentDraft();
+  for (const draft of drafts) {
+    const isLatest = draft.id === drafts[0].id;
+    const isViewing = viewed && draft.id === viewed.id;
+
+    const row = document.createElement("div");
+    row.className = "version-item";
+    row.classList.toggle("viewing", Boolean(isViewing));
+
+    const meta = document.createElement("div");
+    meta.className = "version-meta";
+    const title = document.createElement("p");
+    title.className = "version-title";
+    title.textContent = `v${draft.version}${isLatest ? ` · ${t("latestBadge")}` : ""}`;
+    const restoredFrom = draft.content?.restored_from;
+    if (restoredFrom) {
+      const tag = document.createElement("span");
+      tag.className = "version-restored";
+      tag.textContent = ` (${t("restoredFrom", { version: restoredFrom })})`;
+      title.append(tag);
+    }
+    const sub = document.createElement("p");
+    sub.className = "item-meta";
+    const cond = conditionsSummary(draft.content?.conditions);
+    sub.textContent = `${formatDate(draft.created_at)}${cond ? ` · ${cond}` : ""}`;
+    meta.append(title, sub);
+
+    const actions = document.createElement("div");
+    actions.className = "version-actions";
+    const viewBtn = document.createElement("button");
+    viewBtn.type = "button";
+    viewBtn.className = "secondary";
+    viewBtn.textContent = t("viewVersion");
+    viewBtn.disabled = Boolean(isViewing);
+    viewBtn.addEventListener("click", () => {
+      state.viewDraftId = draft.id;
+      renderDraftPreview();
+    });
+    actions.append(viewBtn);
+    if (!isLatest) {
+      const restoreBtn = document.createElement("button");
+      restoreBtn.type = "button";
+      restoreBtn.textContent = t("restoreVersion");
+      restoreBtn.addEventListener("click", () => restoreVersion(draft.id));
+      actions.append(restoreBtn);
+    }
+
+    row.append(meta, actions);
+    els.versionList.append(row);
+  }
+}
+
+async function restoreVersion(artifactId) {
+  const project = selectedProject();
+  if (!project) return;
+  try {
+    await api(`/projects/${project.id}/drafts/${artifactId}/restore`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    state.viewDraftId = null;
+    showToast(t("restoredToast"));
+    await loadArtifacts();
+    renderDraftPreview();
+  } catch (error) {
+    showToast(error.message, true);
   }
 }
 
@@ -1473,6 +1873,13 @@ function renderNextAction() {
     return;
   }
 
+  if (project.status === "cancelled") {
+    els.nextAction.classList.add("needs-answer");
+    els.nextActionTitle.textContent = t("runCancelled");
+    els.nextActionBody.textContent = t("runCancelledBody");
+    return;
+  }
+
   if (project.status === "running") {
     els.nextActionTitle.textContent = t("writingInProgress");
     els.nextActionBody.textContent = t("writingInProgressBody");
@@ -1533,6 +1940,9 @@ els.themeSelect?.addEventListener("change", () => {
   applyTheme();
 });
 
+els.sidebarToggle?.addEventListener("click", toggleSidebar);
+els.sidebarBackdrop?.addEventListener("click", () => setSidebarCollapsed(true, { persist: false }));
+
 els.refreshButton.addEventListener("click", async () => {
   try {
     await loadHealth();
@@ -1558,6 +1968,12 @@ els.addArtifactToggle.addEventListener("click", () => {
 els.draftViewToggle.addEventListener("click", () => {
   state.draftView = state.draftView === "rendered" ? "raw" : "rendered";
   renderDraftPreview();
+});
+
+els.versionsButton?.addEventListener("click", () => {
+  state.versionsOpen = !state.versionsOpen;
+  renderVersions();
+  updateVersionsVisibility();
 });
 
 els.formViewButton?.addEventListener("click", () => {
@@ -1639,12 +2055,97 @@ async function startWritingRun() {
 }
 
 els.runButton.addEventListener("click", startWritingRun);
+els.cancelButton?.addEventListener("click", cancelWritingRun);
 
 els.deleteProjectButton.addEventListener("click", async () => {
   const project = selectedProject();
   if (!project) return;
   await deleteProject(project);
 });
+
+function openRequestEdit() {
+  const project = selectedProject();
+  if (!project) return;
+  els.editProjectTitle.value = project.title;
+  els.editProjectRequest.value = project.initial_request;
+  els.requestView.classList.add("hidden");
+  els.requestEditForm.classList.remove("hidden");
+}
+
+function closeRequestEdit() {
+  els.requestEditForm.classList.add("hidden");
+  els.requestView.classList.remove("hidden");
+}
+
+els.editRequestButton?.addEventListener("click", openRequestEdit);
+els.cancelRequestEdit?.addEventListener("click", closeRequestEdit);
+
+els.requestEditForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const project = selectedProject();
+  if (!project) return;
+  try {
+    await api(`/projects/${project.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: els.editProjectTitle.value.trim(),
+        initial_request: els.editProjectRequest.value.trim(),
+      }),
+    });
+    closeRequestEdit();
+    showToast(t("requestUpdated"));
+    await loadProjects();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+els.addReferenceUrlButton?.addEventListener("click", async () => {
+  const project = selectedProject();
+  if (!project) return;
+  const url = els.addReferenceUrl.value.trim();
+  if (!url) {
+    showToast(t("enterUrl"), true);
+    return;
+  }
+  try {
+    await api(`/projects/${project.id}/references/urls`, {
+      method: "POST",
+      body: JSON.stringify({ urls: [url] }),
+    });
+    els.addReferenceUrl.value = "";
+    showToast(t("referenceAdded"));
+    await loadReferences();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+els.addReferenceFilesButton?.addEventListener("click", async () => {
+  const project = selectedProject();
+  if (!project) return;
+  const files = Array.from(els.addReferenceFiles.files || []);
+  if (!files.length) {
+    showToast(t("selectFiles"), true);
+    return;
+  }
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file);
+  try {
+    await api(`/projects/${project.id}/references/files`, {
+      method: "POST",
+      body: formData,
+    });
+    els.addReferenceFiles.value = "";
+    showToast(t("referenceAdded"));
+    await loadReferences();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+els.searchEnabledSelect?.addEventListener("change", saveProjectSettings);
+els.sectionSearchSelect?.addEventListener("change", saveProjectSettings);
 
 els.projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1758,11 +2259,139 @@ els.artifactForm.addEventListener("submit", async (event) => {
   }
 });
 
+function currentLlmProviderMeta() {
+  const id = els.llmProvider.value;
+  return llmSettingsState.providers.find((preset) => preset.id === id) || null;
+}
+
+function providerLabel(preset) {
+  return state.language === "ko" ? preset.label_ko : preset.label_en;
+}
+
+function providerNote(preset) {
+  return state.language === "ko" ? preset.note_ko : preset.note_en;
+}
+
+function populateLlmProviderSelect() {
+  els.llmProvider.innerHTML = "";
+  for (const preset of llmSettingsState.providers) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = providerLabel(preset);
+    els.llmProvider.append(option);
+  }
+}
+
+function renderLlmProviderFields() {
+  const preset = currentLlmProviderMeta();
+  if (!preset) return;
+  els.llmBaseUrlRow.classList.toggle("hidden", !preset.base_url_editable);
+  els.llmApiKeyRow.classList.toggle("hidden", !preset.needs_api_key);
+  els.llmModelRow.classList.toggle("hidden", !preset.model_editable);
+  els.llmProviderNote.textContent = providerNote(preset);
+  els.llmTestResult.classList.add("hidden");
+}
+
+function fillLlmFormForProvider(providerId) {
+  const preset = llmSettingsState.providers.find((item) => item.id === providerId);
+  if (!preset) return;
+  const active = llmSettingsState.active;
+  const isActive = active && active.provider === providerId;
+  els.llmProvider.value = providerId;
+  els.llmBaseUrl.value = isActive ? active.base_url : preset.base_url;
+  els.llmModel.value = isActive ? active.model : preset.default_model;
+  els.llmApiKey.value = "";
+  els.llmApiKey.placeholder =
+    isActive && active.has_api_key ? active.api_key_masked : "sk-...";
+  renderLlmProviderFields();
+}
+
+async function loadLlmSettings() {
+  const data = await api("/settings/llm");
+  llmSettingsState.providers = data.providers || [];
+  llmSettingsState.active = data.active || null;
+  llmSettingsState.loaded = true;
+  populateLlmProviderSelect();
+  fillLlmFormForProvider(
+    llmSettingsState.active?.provider || llmSettingsState.providers[0]?.id,
+  );
+}
+
+function collectLlmForm() {
+  const preset = currentLlmProviderMeta();
+  const payload = { provider: els.llmProvider.value };
+  if (preset?.base_url_editable) payload.base_url = els.llmBaseUrl.value.trim();
+  if (preset?.model_editable) payload.model = els.llmModel.value.trim();
+  // Empty key on submit means "keep the stored one"; send null in that case.
+  const key = els.llmApiKey.value.trim();
+  payload.api_key = key ? key : null;
+  return payload;
+}
+
+async function openLlmSettings() {
+  try {
+    if (!llmSettingsState.loaded) await loadLlmSettings();
+    else fillLlmFormForProvider(llmSettingsState.active?.provider);
+    els.llmTestResult.classList.add("hidden");
+    els.llmSettingsModal.showModal();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function saveLlmSettings() {
+  try {
+    const data = await api("/settings/llm", {
+      method: "PUT",
+      body: JSON.stringify(collectLlmForm()),
+    });
+    llmSettingsState.active = data.active;
+    showToast(t("llmSaved"));
+    els.llmSettingsModal.close();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function testLlmSettings() {
+  els.llmTestButton.disabled = true;
+  els.llmTestResult.classList.remove("hidden");
+  els.llmTestResult.classList.remove("ok", "error");
+  els.llmTestResult.textContent = t("llmTesting");
+  try {
+    const result = await api("/settings/llm/test", {
+      method: "POST",
+      body: JSON.stringify(collectLlmForm()),
+    });
+    if (result.ok) {
+      els.llmTestResult.classList.add("ok");
+      els.llmTestResult.textContent = t("llmTestOk", { model: result.model });
+    } else {
+      els.llmTestResult.classList.add("error");
+      els.llmTestResult.textContent = t("llmTestFail", { error: result.error || "" });
+    }
+  } catch (error) {
+    els.llmTestResult.classList.add("error");
+    els.llmTestResult.textContent = t("llmTestFail", { error: error.message });
+  } finally {
+    els.llmTestButton.disabled = false;
+  }
+}
+
+els.llmSettingsButton?.addEventListener("click", openLlmSettings);
+els.llmSettingsClose?.addEventListener("click", () => els.llmSettingsModal.close());
+els.llmProvider?.addEventListener("change", () =>
+  fillLlmFormForProvider(els.llmProvider.value),
+);
+els.llmTestButton?.addEventListener("click", testLlmSettings);
+els.llmSaveButton?.addEventListener("click", saveLlmSettings);
+
 async function boot() {
   if (!translations[state.language]) {
     state.language = "en";
   }
   applyTheme();
+  applySidebar();
   applyStaticTranslations();
   try {
     await loadHealth();

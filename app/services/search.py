@@ -197,7 +197,10 @@ def _search_browser(queries: list[str]) -> tuple[list[dict[str, str]], list[str]
 
 
 def search_web(project: ProjectRead, decisions: list[UserDecisionRead]) -> dict[str, Any]:
-    if not settings.search_enabled:
+    # Lazy import avoids a circular import (repositories imports this module).
+    from app.db.repositories import effective_search_enabled
+
+    if not effective_search_enabled(project.id):
         return {
             "enabled": False,
             "query": build_search_query(project, decisions),
@@ -276,13 +279,16 @@ def research_chapters(
     project: ProjectRead, section_plan: dict[str, Any]
 ) -> dict[str, Any]:
     """Targeted follow-up research: a few sources per top-level chapter."""
+    from app.db.repositories import effective_search_enabled
+
     chapters = [
         chapter
         for chapter in (section_plan.get("outline_tree") or [])
         if isinstance(chapter, dict)
     ]
-    if not settings.search_enabled or not chapters:
-        return {"enabled": settings.search_enabled, "chapters": []}
+    search_enabled = effective_search_enabled(project.id)
+    if not search_enabled or not chapters:
+        return {"enabled": search_enabled, "chapters": []}
 
     queries, query_source = _plan_chapter_queries(project, chapters)
     entries: list[dict[str, Any]] = []
@@ -374,9 +380,12 @@ def build_section_query(section: dict[str, Any]) -> str:
 def search_section_sources(
     section: dict[str, Any], limit: int
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Top-up search for one section whose planned sources are irrelevant."""
-    if not settings.search_enabled:
-        return [], None
+    """Top-up search for one section whose planned sources are irrelevant.
+
+    The only caller already gates on the project's effective search setting, so
+    this does not re-check the global flag (which could differ from a per-project
+    override).
+    """
     query = build_section_query(section)
     if not query:
         return [], None
