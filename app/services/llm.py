@@ -1707,6 +1707,153 @@ def review_continuity_staged(
     }, ({"chapter_calls": usages} if usages else None)
 
 
+def _rubric_lines(rubric: list[Dict[str, Any]]) -> str:
+    return "\n".join(
+        f"- {item.get('key')}: {item.get('name')} - {item.get('description')}"
+        for item in rubric
+        if isinstance(item, dict) and item.get("key")
+    )
+
+
+def _review_chapter_rubric(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    chapter_id: str,
+    sections_block: str,
+    rubric: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    style = str(brief.get("style") or brief.get("tone") or "unspecified")
+    return _json_chat(
+        "You grade one chapter of a document against a quality rubric. Return only valid JSON.",
+        f"""
+Project title:
+{project.title}
+
+Document goal:
+{_clip(brief.get("goal"), 200)}
+
+Required writing register: {style}
+
+Rubric criteria (grade each from 1 to 5; 5 = excellent):
+{_rubric_lines(rubric)}
+
+Chapter {chapter_id} sections:
+{sections_block}
+
+Grade strictly against the rubric. For every criterion scored 3 or lower,
+add one concrete issue that names the section id and says what to change.
+Put the ids of sections that need rewriting in revision_targets.
+
+Return this JSON shape:
+{{
+  "scores": [{{"key": "", "score": 5, "note": ""}}],
+  "issues": [],
+  "revision_targets": []
+}}
+""",
+    )
+
+
+def review_rubric_staged(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    profile: Dict[str, Any] | None,
+    section_drafts: list[Dict[str, Any]],
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    """Grade the draft against the document type's rubric, chapter by chapter.
+
+    Sized for small models like the continuity review: one call per chapter
+    over clipped section text. Best effort throughout - a failed chapter is
+    noted and skipped, and a fully failed review returns a pass verdict so
+    rubric grading can never block a run.
+    """
+    rubric = [
+        item
+        for item in ((profile or {}).get("rubric") or [])
+        if isinstance(item, dict) and item.get("key")
+    ]
+    if not rubric:
+        return {
+            "verdict": "pass",
+            "criteria": [],
+            "issues": [],
+            "revision_targets": [],
+            "notes": "No rubric defined for this document type.",
+        }, None
+
+    by_chapter: Dict[str, list[Dict[str, Any]]] = {}
+    for draft in section_drafts:
+        section = draft.get("section") or {}
+        chapter_id = str(section.get("id", "")).split(".")[0]
+        by_chapter.setdefault(chapter_id, []).append(draft)
+
+    score_lists: Dict[str, list[int]] = {item["key"]: [] for item in rubric}
+    score_notes: Dict[str, list[str]] = {item["key"]: [] for item in rubric}
+    issues: list[Any] = []
+    targets: list[str] = []
+    notes: list[str] = []
+    usages: list[Dict[str, Any]] = []
+
+    for chapter_id, drafts in by_chapter.items():
+        sections_block = "\n\n".join(
+            f"[{(draft.get('section') or {}).get('id', '')}] "
+            f"{(draft.get('section') or {}).get('title', '')}\n"
+            f"{str(draft.get('markdown', ''))[:1800]}"
+            for draft in drafts
+        )
+        try:
+            review, usage = _review_chapter_rubric(
+                project, brief, chapter_id, sections_block, rubric
+            )
+        except LLMError:
+            notes.append(f"Chapter {chapter_id} rubric review failed; skipped.")
+            continue
+        if usage is not None:
+            usages.append({"chapter_id": chapter_id, **usage})
+        for entry in review.get("scores") or []:
+            if not isinstance(entry, dict):
+                continue
+            key = str(entry.get("key", "")).strip()
+            if key not in score_lists:
+                continue
+            try:
+                score = int(entry.get("score"))
+            except (TypeError, ValueError):
+                continue
+            score_lists[key].append(min(max(score, 1), 5))
+            note = _clip(entry.get("note"), 150)
+            if note:
+                score_notes[key].append(f"[{chapter_id}] {note}")
+        issues.extend(_clip(issue, 250) for issue in (review.get("issues") or [])[:6])
+        targets.extend(
+            str(target).strip()
+            for target in (review.get("revision_targets") or [])
+            if str(target).strip()
+        )
+
+    criteria = [
+        {
+            "key": item["key"],
+            "name": item.get("name", item["key"]),
+            "average_score": (
+                round(sum(scores) / len(scores), 1) if scores else None
+            ),
+            "min_score": min(scores) if scores else None,
+            "notes": score_notes[item["key"]][:4],
+        }
+        for item in rubric
+        for scores in [score_lists[item["key"]]]
+    ]
+    deduped_targets = list(dict.fromkeys(targets))[:5]
+    return {
+        "verdict": "needs_revision" if deduped_targets else "pass",
+        "criteria": criteria,
+        "issues": issues,
+        "revision_targets": deduped_targets,
+        "notes": " ".join(notes),
+    }, ({"chapter_calls": usages} if usages else None)
+
+
 def _revise_one_section(
     project: ProjectRead,
     brief: Dict[str, Any],

@@ -200,6 +200,19 @@ guidance and rendering/search defaults - the pipeline stages are the same
 for every type - so changing the type invalidates cached artifacts the
 same way editing the request does.
 
+## Rubric Review
+
+After continuity review, a `rubric_review` stage grades the draft against
+the document type's rubric (four criteria per type, declared in
+`doc_types.py` - e.g. spoken naturalness and signposting for scripts,
+argumentation and academic register for a mini-thesis). Grading runs one
+call per chapter over clipped section text, aggregates 1-5 scores per
+criterion into a `rubric_review` artifact, and merges its findings with
+the continuity review's (deduplicated, capped at five sections) so one
+targeted-revision pass fixes both. Rubric grading is best-effort: failed
+chapters are noted and skipped, and a fully failed review passes instead
+of blocking the run.
+
 ## Style Samples
 
 Upload your own writing (.txt/.md) in the "Style samples" panel and the

@@ -37,6 +37,7 @@ from app.services.llm import (
     plan_user_questions,
     review_continuity_staged,
     review_outline,
+    review_rubric_staged,
     review_section_plan,
     revise_section_with_feedback,
     revise_targeted_sections,
@@ -89,6 +90,7 @@ WORKFLOW_STEPS: list[tuple[str, str]] = [
     ("section_summary", "Section summaries"),
     ("feedback_revision", "Feedback revision"),
     ("continuity_review", "Continuity review"),
+    ("rubric_review", "Rubric review"),
     ("targeted_revision", "Targeted revision"),
     ("final_merge", "Final merge"),
 ]
@@ -1281,6 +1283,11 @@ def _invalidate_from_phase(project_id: str, phase: str) -> None:
             "section_draft",
             "draft",
         ],
+        "rubric_review": [
+            "rubric_review",
+            "targeted_revision",
+            "draft",
+        ],
         "research": [
             "research_sources",
             "source_summaries",
@@ -2075,6 +2082,29 @@ def _reexpand_section_plan(
     if not changed:
         return None, None
     return {"outline_tree": new_tree}, {"chapter_calls": usages} if usages else None
+
+
+def _combine_reviews(
+    continuity: Dict[str, Any], rubric: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Merge continuity and rubric findings for one targeted-revision pass.
+
+    Targets are deduplicated in order and capped so a harsh review cannot
+    trigger a rewrite of the whole document."""
+    issues = list(continuity.get("issues") or []) + list(rubric.get("issues") or [])
+    targets = list(
+        dict.fromkeys(
+            str(target).strip()
+            for source in (continuity, rubric)
+            for target in (source.get("revision_targets") or [])
+            if str(target).strip()
+        )
+    )[:5]
+    return {
+        "verdict": "needs_revision" if targets else "pass",
+        "issues": issues,
+        "revision_targets": targets,
+    }
 
 
 def _draft_conditions(project_id: str) -> Dict[str, Any]:
@@ -3282,9 +3312,78 @@ def run_document_generation(
                 token_usage=usage,
             )
 
+        rubric_artifact = _latest_artifact(project_id, "rubric_review")
+        if rubric_artifact is not None and _is_fresh(
+            rubric_artifact.updated_at, continuity_time
+        ):
+            rubric_review = rubric_artifact.content or {}
+            artifact_ids.append(rubric_artifact.id)
+            _complete_reuse_run(
+                project_id,
+                agent_name,
+                "rubric_review",
+                {"artifact_id": rubric_artifact.id},
+            )
+            rubric_time = rubric_artifact.updated_at
+        else:
+            run_id = _start_agent_run(
+                project_id,
+                agent_name,
+                "rubric_review",
+                {
+                    "section_count": len(section_drafts),
+                    "document_type": profile.get("key"),
+                },
+            )
+            if settings.llm_enabled:
+                rubric_review, usage = review_rubric_staged(
+                    project, brief, profile, section_drafts
+                )
+            else:
+                rubric_review, usage = {
+                    "verdict": "pass",
+                    "criteria": [],
+                    "issues": [],
+                    "revision_targets": [],
+                    "notes": "Local fallback rubric review passed.",
+                }, None
+            with get_connection() as conn:
+                artifact_ids.append(
+                    _insert_artifact(
+                        conn,
+                        project_id,
+                        "rubric_review",
+                        "Rubric review",
+                        rubric_review,
+                        utc_now_iso(),
+                        agent_name,
+                    )
+                )
+            rubric_review_artifact = get_artifact(project_id, artifact_ids[-1])
+            rubric_time = (
+                rubric_review_artifact.updated_at
+                if rubric_review_artifact
+                else utc_now_iso()
+            )
+            _complete_agent_run(
+                run_id,
+                {
+                    "artifact_id": artifact_ids[-1],
+                    "verdict": rubric_review.get("verdict"),
+                    "scores": {
+                        str(item.get("key")): item.get("average_score")
+                        for item in (rubric_review.get("criteria") or [])
+                        if isinstance(item, dict)
+                    },
+                },
+                token_usage=usage,
+            )
+
+        combined_review = _combine_reviews(continuity, rubric_review)
+
         revision_artifact = _latest_artifact(project_id, "targeted_revision")
         if revision_artifact is not None and _is_fresh(
-            revision_artifact.updated_at, continuity_time
+            revision_artifact.updated_at, rubric_time
         ):
             revision = revision_artifact.content or {}
             revised_sections = revision.get("sections")
@@ -3303,11 +3402,15 @@ def run_document_generation(
                 project_id,
                 agent_name,
                 "targeted_revision",
-                {"continuity_verdict": continuity.get("verdict")},
+                {
+                    "continuity_verdict": continuity.get("verdict"),
+                    "rubric_verdict": rubric_review.get("verdict"),
+                    "target_count": len(combined_review.get("revision_targets") or []),
+                },
             )
             if settings.llm_enabled:
                 revised_sections, usage = revise_targeted_sections(
-                    project, brief, section_drafts, continuity
+                    project, brief, section_drafts, combined_review
                 )
             else:
                 revised_sections, usage = section_drafts, None
@@ -3316,6 +3419,7 @@ def run_document_generation(
                 "sections": merged_sections,
                 "changed": merged_sections != section_drafts,
                 "continuity_verdict": continuity.get("verdict"),
+                "rubric_verdict": rubric_review.get("verdict"),
             }
             section_drafts = merged_sections
             with get_connection() as conn:
@@ -3746,6 +3850,7 @@ def get_workflow_progress(project_id: str) -> Optional[WorkflowProgressRead]:
             else None
         ),
         "continuity_review": artifact_times.get("continuity_review"),
+        "rubric_review": artifact_times.get("rubric_review"),
         "targeted_revision": artifact_times.get("targeted_revision"),
         "final_merge": artifact_times.get("draft"),
     }

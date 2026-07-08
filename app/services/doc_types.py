@@ -27,6 +27,16 @@ DEFAULT_DOC_TYPE = "report"
 
 DOC_TYPES: Dict[str, Dict[str, Any]] = {
     "report": {
+        "rubric": [
+            {"key": "accuracy", "name": "Accuracy & evidence",
+             "description": "claims are specific, correct, and supported by the cited sources"},
+            {"key": "structure", "name": "Structural clarity",
+             "description": "each section owns one topic; the reader can navigate to answers fast"},
+            {"key": "actionability", "name": "Actionability",
+             "description": "findings lead to clear conclusions or next steps, not vague statements"},
+            {"key": "completeness", "name": "Completeness",
+             "description": "the brief's must-include topics are all covered at adequate depth"},
+        ],
         "label_en": "Report / Brief",
         "label_ko": "보고서·브리프",
         "research_default": True,
@@ -54,6 +64,16 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         ),
     },
     "academic_paper": {
+        "rubric": [
+            {"key": "thesis", "name": "Research question focus",
+             "description": "every chapter serves the stated research question and the conclusion answers it"},
+            {"key": "argument", "name": "Argumentation & evidence",
+             "description": "claims follow logically and each substantive claim carries a citation"},
+            {"key": "objectivity", "name": "Academic register",
+             "description": "objective written register throughout; no first person or rhetorical questions"},
+            {"key": "terminology", "name": "Term definitions & consistency",
+             "description": "key terms are defined on first use and used identically everywhere"},
+        ],
         "label_en": "Academic mini-thesis",
         "label_ko": "소논문 (학교 과제)",
         "research_default": True,
@@ -85,6 +105,16 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         ),
     },
     "blog_post": {
+        "rubric": [
+            {"key": "hook", "name": "Hook & momentum",
+             "description": "the opening earns attention and each section keeps a reason to continue"},
+            {"key": "concreteness", "name": "Concrete examples",
+             "description": "ideas are shown through examples or small stories, not abstractions"},
+            {"key": "voice", "name": "Consistent voice",
+             "description": "one conversational persona addressing the reader directly throughout"},
+            {"key": "scannability", "name": "Scannability",
+             "description": "short paragraphs and curiosity-driven headings; skimming still conveys the takeaway"},
+        ],
         "label_en": "Blog post / Column",
         "label_ko": "블로그·칼럼",
         "research_default": True,
@@ -114,6 +144,16 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         ),
     },
     "essay": {
+        "rubric": [
+            {"key": "throughline", "name": "Single through-line",
+             "description": "one thesis or felt experience develops across the whole piece without detours"},
+            {"key": "showing", "name": "Scenes & sensory detail",
+             "description": "specific scenes and senses carry the meaning before any telling"},
+            {"key": "voice", "name": "Voice consistency",
+             "description": "the same first-person voice, register, and mood from first line to last"},
+            {"key": "resonance", "name": "Turn & resonance",
+             "description": "the piece turns somewhere and the ending lands with weight rather than summary"},
+        ],
         "label_en": "Essay / Opinion piece",
         "label_ko": "에세이·논설문",
         "research_default": False,
@@ -144,6 +184,16 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         ),
     },
     "tech_doc": {
+        "rubric": [
+            {"key": "executability", "name": "Executability",
+             "description": "a reader can follow the steps as written and reach the stated result"},
+            {"key": "preconditions", "name": "Preconditions & results",
+             "description": "each task states what is required before and what success looks like after"},
+            {"key": "precision", "name": "Terminology precision",
+             "description": "commands, names, and terms are exact and identical across sections"},
+            {"key": "coverage", "name": "Task coverage",
+             "description": "the reader's core tasks are all documented, including failure handling"},
+        ],
         "label_en": "Technical documentation",
         "label_ko": "기술 문서·매뉴얼",
         "research_default": True,
@@ -174,6 +224,16 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         ),
     },
     "presentation_script": {
+        "rubric": [
+            {"key": "spokenness", "name": "Spoken naturalness",
+             "description": "reads aloud naturally in short spoken sentences; no written-style constructions"},
+            {"key": "transitions", "name": "Transitions & signposting",
+             "description": "each segment opens from the previous one and the audience always knows where they are"},
+            {"key": "engagement", "name": "Audience engagement",
+             "description": "direct address, questions, or moments that hold a listening audience"},
+            {"key": "pacing", "name": "Message pacing",
+             "description": "one idea per segment, a clear single key message, and a closing that repeats it"},
+        ],
         "label_en": "Presentation script",
         "label_ko": "발표 대본",
         "research_default": True,

@@ -25,6 +25,7 @@ REQUIRED_FIELDS = (
     "brief_guidance",
     "outline_guidance",
     "section_guidance",
+    "rubric",
 )
 
 
