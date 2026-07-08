@@ -72,9 +72,11 @@ def get_project_settings_endpoint(project_id: str) -> ProjectSettingsRead:
     return ProjectSettingsRead(
         search_enabled=stored.get("search_enabled"),
         section_search_enabled=stored.get("section_search_enabled"),
+        citation_style=stored.get("citation_style"),
         defaults={
             "search_enabled": settings.search_enabled,
             "section_search_enabled": settings.section_search_enabled,
+            "citation_style": settings.citation_style,
         },
     )
 
@@ -89,8 +91,12 @@ def update_project_settings_endpoint(
         **stored,
         "search_enabled": payload.search_enabled,
         "section_search_enabled": payload.section_search_enabled,
+        "citation_style": payload.citation_style,
     }
     # A run-affecting setting changed, so invalidate stale artifacts on next run.
+    # citation_style is deliberately excluded: it only changes how the final
+    # merge renders citations, so cached section drafts stay valid and a style
+    # change just re-merges on the next run.
     changed = (
         stored.get("search_enabled") != payload.search_enabled
         or stored.get("section_search_enabled") != payload.section_search_enabled

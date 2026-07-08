@@ -110,6 +110,9 @@ const translations = {
     runConditions: "Run conditions",
     externalSearch: "External search",
     sectionSearch: "Section top-up search",
+    citationStyle: "Citation style",
+    citationNumeric: "Numbered [1]",
+    citationAuthorDate: "Author-date (APA)",
     useDefault: "Use default",
     on: "On",
     off: "Off",
@@ -286,6 +289,9 @@ const translations = {
     runConditions: "생성 조건",
     externalSearch: "외부 검색",
     sectionSearch: "섹션 보강 검색",
+    citationStyle: "참고문헌 표기법",
+    citationNumeric: "번호식 [1]",
+    citationAuthorDate: "저자-연도식 (APA)",
     useDefault: "기본값 사용",
     on: "켜기",
     off: "끄기",
@@ -443,6 +449,7 @@ const els = {
   addReferenceFilesButton: document.querySelector("#addReferenceFilesButton"),
   searchEnabledSelect: document.querySelector("#searchEnabledSelect"),
   sectionSearchSelect: document.querySelector("#sectionSearchSelect"),
+  citationStyleSelect: document.querySelector("#citationStyleSelect"),
   referenceList: document.querySelector("#referenceList"),
   projectList: document.querySelector("#projectList"),
   projectCount: document.querySelector("#projectCount"),
@@ -951,14 +958,19 @@ function renderProjectSettings() {
   if (els.sectionSearchSelect) {
     els.sectionSearchSelect.value = settingToSelectValue(config.section_search_enabled);
   }
+  if (els.citationStyleSelect) {
+    els.citationStyleSelect.value = config.citation_style || "default";
+  }
 }
 
 async function saveProjectSettings() {
   const project = selectedProject();
   if (!project) return;
+  const citationStyle = els.citationStyleSelect?.value;
   const payload = {
     search_enabled: selectValueToSetting(els.searchEnabledSelect.value),
     section_search_enabled: selectValueToSetting(els.sectionSearchSelect.value),
+    citation_style: citationStyle === "default" ? null : citationStyle || null,
   };
   try {
     state.projectSettings = await api(`/projects/${project.id}/settings`, {
@@ -1569,6 +1581,13 @@ function conditionsSummary(conditions) {
     `${t("condSearch")} ${conditions.search_enabled ? t("on") : t("off")}`,
     `${t("condRefs")} ${conditions.reference_count ?? 0}`,
   ];
+  if (conditions.citation_style) {
+    parts.push(
+      conditions.citation_style === "author_date"
+        ? t("citationAuthorDate")
+        : t("citationNumeric"),
+    );
+  }
   if (conditions.model) parts.push(conditions.model);
   return parts.join(" · ");
 }
@@ -2146,6 +2165,7 @@ els.addReferenceFilesButton?.addEventListener("click", async () => {
 
 els.searchEnabledSelect?.addEventListener("change", saveProjectSettings);
 els.sectionSearchSelect?.addEventListener("change", saveProjectSettings);
+els.citationStyleSelect?.addEventListener("change", saveProjectSettings);
 
 els.projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -41,6 +41,10 @@ class Settings:
     # produce broken mermaid syntax often enough that this is opt-in; the UI
     # falls back to a plain code block when a diagram fails to render.
     diagrams_enabled: bool = _bool_env("DIAGRAMS_ENABLED", "false")
+    # Bibliography style for the merged draft: "numeric" ([1] + numbered list)
+    # or "author_date" ((site, n.d.) + alphabetized list). Rendering only, so
+    # changing it never invalidates cached pipeline artifacts.
+    citation_style: str = os.getenv("CITATION_STYLE", "numeric").strip().lower()
     search_timeout_seconds: int = int(os.getenv("SEARCH_TIMEOUT_SECONDS", "15"))
 
 

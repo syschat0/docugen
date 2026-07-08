@@ -17,7 +17,11 @@ from app.schemas.questions import (
     UserDecisionRead,
 )
 from app.schemas.workflow import WorkflowProgressRead, WorkflowRunRead, WorkflowStepRead
-from app.services.citations import format_sources_section, renumber_citations
+from app.services.citations import (
+    CITATION_STYLES,
+    format_sources_section,
+    render_citations,
+)
 from app.services.llm import (
     LLMError,
     apply_section_revisions,
@@ -130,7 +134,7 @@ def set_app_setting(key: str, value: Dict[str, Any]) -> None:
 
 # Per-project overrides for run-affecting flags. A value of None means "use the
 # global env default"; only keys the user explicitly set are stored.
-PROJECT_SETTING_KEYS = ("search_enabled", "section_search_enabled")
+PROJECT_SETTING_KEYS = ("search_enabled", "section_search_enabled", "citation_style")
 
 
 def get_project_settings(project_id: str) -> Dict[str, Any]:
@@ -187,6 +191,14 @@ def effective_section_search_enabled(project_id: str) -> bool:
     return _override_or_default(
         project_id, "section_search_enabled", settings.section_search_enabled
     )
+
+
+def effective_citation_style(project_id: str) -> str:
+    """Resolved citation style; unknown stored/env values fall back to numeric."""
+    value = get_project_settings(project_id).get("citation_style")
+    if value is None:
+        value = settings.citation_style
+    return value if value in CITATION_STYLES else "numeric"
 
 
 def _question_text(question_json: str) -> str:
@@ -1830,6 +1842,8 @@ def _local_merge(
     research: Dict[str, Any] | None,
     section_plan: Dict[str, Any] | None = None,
     used_sources: list[Dict[str, Any]] | None = None,
+    citation_style: str = "numeric",
+    accessed_at: str | None = None,
 ) -> str:
     draft_by_id = {
         str((item.get("section") or {}).get("id", "")): _ensure_markdown_heading_number(
@@ -1866,7 +1880,9 @@ def _local_merge(
     # markers and the "Sources" entries always agree; fall back to the raw
     # research results only when nothing was cited.
     sources = used_sources or (research.get("results", []) if research else [])
-    sources_section = format_sources_section(sources)
+    sources_section = format_sources_section(
+        sources, style=citation_style, accessed_at=accessed_at
+    )
     return f"# {project.title}\n\n{body}{sources_section}"
 
 
@@ -1976,6 +1992,7 @@ def _draft_conditions(project_id: str) -> Dict[str, Any]:
     return {
         "search_enabled": effective_search_enabled(project_id),
         "section_search_enabled": effective_section_search_enabled(project_id),
+        "citation_style": effective_citation_style(project_id),
         "reference_count": len(references),
         "reference_titles": [(ref.title or ref.source) for ref in references[:8]],
         "model": model,
@@ -3085,8 +3102,18 @@ def run_document_generation(
                 token_usage=usage,
             )
 
+        citation_style = effective_citation_style(project_id)
         draft_artifact = _latest_artifact(project_id, "draft")
-        if draft_artifact is not None and _is_fresh(draft_artifact.updated_at, revision_time):
+        # A citation-style change re-renders only this stage: section drafts
+        # stay cached, but a draft merged under another style is stale.
+        draft_style = ((draft_artifact.content or {}).get("conditions") or {}).get(
+            "citation_style"
+        ) if draft_artifact is not None else None
+        if (
+            draft_artifact is not None
+            and _is_fresh(draft_artifact.updated_at, revision_time)
+            and draft_style == citation_style
+        ):
             artifact_ids.append(draft_artifact.id)
             _complete_reuse_run(
                 project_id,
@@ -3113,7 +3140,7 @@ def run_document_generation(
             # links) before merging. Drafts revived from revision artifacts may
             # lack the stored source list; recompute it the same way section
             # writing did.
-            renumbered_drafts, used_sources = renumber_citations(
+            renumbered_drafts, used_sources = render_citations(
                 [
                     {
                         "section": draft["section"],
@@ -3124,7 +3151,8 @@ def run_document_generation(
                         ),
                     }
                     for draft in section_drafts
-                ]
+                ],
+                citation_style,
             )
             seam_ids: list[str] = []
             usage = None
@@ -3144,7 +3172,13 @@ def run_document_generation(
                 for draft in renumbered_drafts
             ]
             final_markdown = _local_merge(
-                project, merge_inputs, research, section_plan, used_sources
+                project,
+                merge_inputs,
+                research,
+                section_plan,
+                used_sources,
+                citation_style,
+                accessed_at=research_cutoff,
             )
             final_content = {
                 "format": "markdown",

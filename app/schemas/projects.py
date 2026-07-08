@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -12,17 +14,19 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectSettingsUpdate(BaseModel):
-    # None means "use the global default"; a bool is an explicit per-project
-    # override.
+    # None means "use the global default"; a set value is an explicit
+    # per-project override.
     search_enabled: bool | None = None
     section_search_enabled: bool | None = None
+    citation_style: Literal["numeric", "author_date"] | None = None
 
 
 class ProjectSettingsRead(BaseModel):
     search_enabled: bool | None = None
     section_search_enabled: bool | None = None
+    citation_style: str | None = None
     # Global env defaults, so the UI can show what "use default" resolves to.
-    defaults: dict[str, bool]
+    defaults: dict[str, bool | str]
 
 
 class ProjectRead(BaseModel):

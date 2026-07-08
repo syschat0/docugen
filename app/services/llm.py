@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.services.llm_settings import get_active_llm_config
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
-from app.services.citations import global_citation_numbers
+from app.services.citations import citation_markers
 
 
 class LLMError(Exception):
@@ -1260,8 +1260,9 @@ Current opening paragraph:
 
 Rewrite ONLY the opening paragraph so it reads as a natural continuation of
 the previous chapter's ending. Keep the same language, the register "{style}",
-and roughly the same length. Preserve inline citation links such as
-[[1]](https://example.com) exactly. Do not add new facts, headings, or lists.
+and roughly the same length. Preserve inline citation links exactly, such as
+[[1]](https://example.com) or [(example.com, n.d.)](https://example.com).
+Do not add new facts, headings, or lists.
 
 Return this JSON shape:
 {{
@@ -1309,8 +1310,7 @@ def smooth_chapter_seams(
                     new_opening, usage = None, None
                 if (
                     new_opening
-                    and global_citation_numbers(new_opening)
-                    == global_citation_numbers(opening)
+                    and citation_markers(new_opening) == citation_markers(opening)
                     and len(new_opening) <= 2 * len(opening) + 200
                 ):
                     parts = [heading, new_opening]

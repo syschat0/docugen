@@ -15,6 +15,10 @@ def _strip_markdown(text: str) -> str:
     cleaned = re.sub(r"```[\s\S]*?```", " ", cleaned)
     cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
     cleaned = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", cleaned)
+    # Citation links ([[3]](url) or [(site, n.d.)](url)) are noise in a
+    # description, so drop them entirely; normal links keep their text.
+    cleaned = re.sub(r"\[\[\d+\]\]\([^)]+\)", " ", cleaned)
+    cleaned = re.sub(r"\[\([^()\n]{1,120}\)\]\([^)]+\)", " ", cleaned)
     cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
     cleaned = re.sub(r"^#{1,6}\s+", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"^>\s?", "", cleaned, flags=re.MULTILINE)

@@ -174,7 +174,28 @@ SEARCH_MAX_RESULTS=5
 SECTION_SEARCH_ENABLED=false
 SECTION_SEARCH_TOPUP_LIMIT=10
 DIAGRAMS_ENABLED=false
+CITATION_STYLE=numeric
 ```
+
+## Citation Styles
+
+The merged draft renders citations in one of two styles, selectable per
+project in the settings panel (or globally via `CITATION_STYLE`):
+
+- `numeric` (default): inline `[1]` links with a numbered source list in
+  first-citation order, e.g. `1. [Title](url). example.com (accessed
+  2026-07-08)`.
+- `author_date` (APA-like): inline `(example.com, n.d.)` links with an
+  alphabetized source list, e.g. `- example.com. (n.d.). [Title](url)`.
+  Multiple sources from the same site are disambiguated as `n.d.-a`,
+  `n.d.-b`, ... in title order.
+
+Sources are web pages, so the site name stands in for the author and the
+research fetch date is shown as the access date. User-uploaded file
+references are listed without a link as `(user-provided reference)`.
+Because both styles are rendered deterministically in `final_merge`,
+changing the style keeps every cached artifact and only re-merges the
+document on the next run.
 
 ## Section Feedback
 

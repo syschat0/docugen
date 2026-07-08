@@ -81,6 +81,8 @@ function stripMarkdown(text) {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
+    .replace(/\[\[\d+\]\]\([^)]+\)/g, " ")
+    .replace(/\[\([^()\n]{1,120}\)\]\([^)]+\)/g, " ")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/^>\s?/gm, "")

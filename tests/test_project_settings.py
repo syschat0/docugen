@@ -52,6 +52,43 @@ class TestEffectiveSettings:
         assert repositories.effective_section_search_enabled("p1") is True
 
 
+class TestEffectiveCitationStyle:
+    def test_override_takes_precedence_over_global(self, monkeypatch):
+        monkeypatch.setattr(
+            repositories,
+            "get_project_settings",
+            lambda pid: {"citation_style": "author_date"},
+        )
+        monkeypatch.setattr(
+            repositories, "settings", SimpleNamespace(citation_style="numeric")
+        )
+        assert repositories.effective_citation_style("p1") == "author_date"
+
+    def test_none_falls_back_to_global_default(self, monkeypatch):
+        monkeypatch.setattr(repositories, "get_project_settings", lambda pid: {})
+        monkeypatch.setattr(
+            repositories, "settings", SimpleNamespace(citation_style="author_date")
+        )
+        assert repositories.effective_citation_style("p1") == "author_date"
+
+    def test_unknown_values_fall_back_to_numeric(self, monkeypatch):
+        monkeypatch.setattr(
+            repositories,
+            "get_project_settings",
+            lambda pid: {"citation_style": "chicago"},
+        )
+        monkeypatch.setattr(
+            repositories, "settings", SimpleNamespace(citation_style="numeric")
+        )
+        assert repositories.effective_citation_style("p1") == "numeric"
+
+        monkeypatch.setattr(repositories, "get_project_settings", lambda pid: {})
+        monkeypatch.setattr(
+            repositories, "settings", SimpleNamespace(citation_style="bogus")
+        )
+        assert repositories.effective_citation_style("p1") == "numeric"
+
+
 class TestDecisionCutoff:
     def test_inputs_changed_at_extends_cutoff(self, monkeypatch):
         monkeypatch.setattr(
@@ -74,6 +111,9 @@ class TestDraftConditions:
         monkeypatch.setattr(repositories, "effective_search_enabled", lambda pid: False)
         monkeypatch.setattr(repositories, "effective_section_search_enabled", lambda pid: True)
         monkeypatch.setattr(
+            repositories, "effective_citation_style", lambda pid: "author_date"
+        )
+        monkeypatch.setattr(
             repositories,
             "settings",
             SimpleNamespace(llm_model="fallback-model"),
@@ -81,6 +121,7 @@ class TestDraftConditions:
         conditions = repositories._draft_conditions("p1")
         assert conditions["search_enabled"] is False
         assert conditions["section_search_enabled"] is True
+        assert conditions["citation_style"] == "author_date"
         assert conditions["reference_count"] == 0
         assert conditions["reference_titles"] == []
         # Model comes from the active LLM config, or the env fallback on error.

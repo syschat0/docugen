@@ -17,6 +17,10 @@
         '<a class="citation-link" href="$2" target="_blank" rel="noreferrer" title="$2">[$1]</a>',
       )
       .replace(
+        /\[\(([^()\n]{1,120})\)\]\((https?:\/\/[^)\s]+)\)/g,
+        '<a class="citation-link" href="$2" target="_blank" rel="noreferrer" title="$2">($1)</a>',
+      )
+      .replace(
         /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
         '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
       );
