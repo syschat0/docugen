@@ -434,11 +434,65 @@ label {
   font-size: 24px;
 }
 
-.hero-actions {
+.status-strip {
+  position: sticky;
+  top: 8px;
+  z-index: 30;
   display: flex;
   align-items: center;
-  flex-shrink: 0;
-  gap: 10px;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: var(--outline);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-small);
+}
+
+.strip-message {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.strip-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  width: 200px;
+}
+
+.strip-track {
+  flex: 1;
+  height: 10px;
+  overflow: hidden;
+  border: var(--border-thin);
+  border-radius: 999px;
+  background: var(--input-bg);
+}
+
+.strip-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--progress-fill);
+  transition: width 180ms ease;
+}
+
+.strip-percent {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.strip-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
 }
 
 .next-action {
@@ -635,9 +689,44 @@ label {
 
 .progress-steps {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   overflow-x: auto;
   padding: 10px 0 6px;
+}
+
+.pipeline-head {
+  cursor: pointer;
+  list-style: none;
+}
+
+.pipeline-head::-webkit-details-marker {
+  display: none;
+}
+
+.pipeline-head::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 14px;
+  transition: transform 120ms ease;
+}
+
+#pipelinePanel[open] .pipeline-head::before {
+  transform: rotate(90deg);
+}
+
+/* Outranks the `.section-head span` pill rule, which would otherwise win. */
+.section-head span.pipeline-summary-text {
+  flex: 1;
+  text-align: right;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#pipelinePanel[open] .progress-track {
+  margin-top: 10px;
 }
 
 .progress-step {
@@ -737,13 +826,14 @@ label {
 
 .draft-viewer {
   display: grid;
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  grid-template-columns: minmax(180px, 220px) minmax(0, 80ch);
   gap: 12px;
   align-items: start;
+  justify-content: center;
 }
 
 .draft-viewer.no-toc {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 80ch);
 }
 
 .draft-toc {
@@ -818,6 +908,26 @@ label {
   font-family: ui-monospace, SFMono-Regular, Consolas, "D2Coding", monospace;
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* In the review phase the whole page scrolls, so the draft preview drops its
+ * internal scrollbar and the table of contents parks below the sticky strip. */
+#projectDetail[data-phase="review"] .draft-preview {
+  max-height: none;
+}
+
+#projectDetail[data-phase="review"] .draft-toc {
+  top: 76px;
+  max-height: calc(100vh - 100px);
+}
+
+#projectDetail[data-phase="review"] .markdown-body h1,
+#projectDetail[data-phase="review"] .markdown-body h2,
+#projectDetail[data-phase="review"] .markdown-body h3,
+#projectDetail[data-phase="review"] .markdown-body h4,
+#projectDetail[data-phase="review"] .markdown-body h5,
+#projectDetail[data-phase="review"] .markdown-body h6 {
+  scroll-margin-top: 84px;
 }
 
 .version-list {
@@ -1133,6 +1243,12 @@ label {
 
 .details-section > summary + * {
   margin-top: 14px;
+}
+
+.details-footer {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: var(--outline);
 }
 
 .tabs {
@@ -1532,10 +1648,6 @@ label {
     align-items: stretch;
     flex-direction: column;
   }
-
-  .hero-actions {
-    justify-content: space-between;
-  }
 }
 
 @media (max-width: 560px) {
@@ -1610,5 +1722,17 @@ label {
 
   .progress-step {
     min-width: 116px;
+  }
+
+  .status-strip {
+    flex-wrap: wrap;
+  }
+
+  .strip-actions {
+    width: 100%;
+  }
+
+  .strip-progress {
+    width: 100%;
   }
 }

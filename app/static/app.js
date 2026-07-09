@@ -19,6 +19,7 @@ const state = {
   viewDraftId: null,
   versionsOpen: false,
   progress: null,
+  appliedPhase: null,
 };
 
 const translations = {
@@ -50,6 +51,7 @@ const translations = {
     details: "Details",
     deleteAnswer: "Delete Answer",
     deleteAnswerConfirm: "Delete this answer and make the question pending again?",
+    deleteProject: "Delete project",
     deleteProjectConfirm:
       'Delete "{title}"? This will remove its questions, answers, artifacts, summaries, and run logs.',
     draftEmpty: "Run the pipeline to generate a draft.",
@@ -251,6 +253,7 @@ const translations = {
     details: "상세",
     deleteAnswer: "답변 삭제",
     deleteAnswerConfirm: "이 답변을 삭제하고 질문을 다시 대기 상태로 바꿀까요?",
+    deleteProject: "프로젝트 삭제",
     deleteProjectConfirm:
       '"{title}" 프로젝트를 삭제할까요? 질문, 답변, 산출물, 요약, 실행 로그가 모두 삭제됩니다.',
     draftEmpty: "파이프라인을 실행하면 초안이 생성됩니다.",
@@ -520,6 +523,13 @@ const els = {
   detailTitle: document.querySelector("#detailTitle"),
   detailMeta: document.querySelector("#detailMeta"),
   detailStatus: document.querySelector("#detailStatus"),
+  statusStrip: document.querySelector("#statusStrip"),
+  stripMessage: document.querySelector("#stripMessage"),
+  stripProgress: document.querySelector("#stripProgress"),
+  stripFill: document.querySelector("#stripFill"),
+  stripPercent: document.querySelector("#stripPercent"),
+  pipelinePanel: document.querySelector("#pipelinePanel"),
+  pipelineSummaryText: document.querySelector("#pipelineSummaryText"),
   nextAction: document.querySelector("#nextAction"),
   nextActionTitle: document.querySelector("#nextActionTitle"),
   nextActionBody: document.querySelector("#nextActionBody"),
@@ -908,6 +918,7 @@ async function renderSelectedProject() {
   renderNextAction();
   renderDraftPreview();
   renderTabs();
+  applyLayoutPhase();
 
   if (state.progress?.status === "running") {
     if (!state.progressTimer) startRunPolling();
@@ -1219,6 +1230,13 @@ function renderProgress() {
     });
     els.pipelineList.append(detail);
   }
+
+  const doneCount = progress.steps.filter((step) => step.status === "completed").length;
+  els.pipelineSummaryText.textContent =
+    `${statusLabel(progress.status)} · ${doneCount}/${progress.steps.length}`;
+
+  renderStatusStrip();
+  applyLayoutPhase();
 }
 
 function resetProgressForRun(startPhase = "intake") {
@@ -2053,91 +2071,123 @@ async function toggleSectionFeedbackPanel(sectionId, heading) {
   textarea.focus();
 }
 
+function layoutPhase() {
+  const project = selectedProject();
+  if (!project) return null;
+  if (project.status === "running" || state.progress?.status === "running") return "running";
+  if (state.questions.some((q) => q.status === "pending")) return "questions";
+  if (project.status === "failed" || project.status === "cancelled") return "attention";
+  if (latestDraft()) return "review";
+  return "setup";
+}
+
+function applyLayoutPhase() {
+  const project = selectedProject();
+  const phase = layoutPhase();
+  if (!project || !phase) return;
+  els.projectDetail.dataset.phase = phase;
+  const key = `${project.id}:${phase}`;
+  // Apply the phase's default open/collapsed state only when the phase actually
+  // changes, so a user's manual toggle survives re-renders until the next phase.
+  if (state.appliedPhase === key) return;
+  state.appliedPhase = key;
+  els.requestDetails.open = phase === "setup";
+  els.pipelinePanel.open = phase === "running" || phase === "attention";
+}
+
+function renderStatusStrip() {
+  const project = selectedProject();
+  if (!project) return;
+
+  const phase = layoutPhase();
+  let message = "";
+  if (phase === "questions") {
+    const pendingCount = state.questions.filter((question) => question.status === "pending").length;
+    message =
+      state.language === "ko"
+        ? `${pendingCount}개 질문에 답변`
+        : `Answer ${pendingCount} question${pendingCount === 1 ? "" : "s"}`;
+  } else if (phase === "running") {
+    const runningStep = state.progress?.steps?.find((step) => step.status === "running");
+    message = runningStep
+      ? phaseLabel(runningStep.phase, runningStep.label)
+      : t("writingInProgress");
+  } else if (phase === "attention") {
+    message = project.status === "cancelled" ? t("runCancelled") : t("pipelineFailed");
+  } else if (phase === "review") {
+    message = t("reviewDraft");
+  } else {
+    message = t("startWritingAction");
+  }
+  els.stripMessage.textContent = message;
+
+  const showProgress = phase === "running" && Boolean(state.progress);
+  els.stripProgress.classList.toggle("hidden", !showProgress);
+  if (showProgress) {
+    els.stripFill.style.width = `${state.progress.percent}%`;
+    els.stripPercent.textContent = `${state.progress.percent}%`;
+  }
+}
+
 function renderNextAction() {
   const project = selectedProject();
   if (!project) return;
+
+  renderStatusStrip();
 
   const pendingCount = state.questions.filter((question) => question.status === "pending").length;
   els.nextAction.className = "next-action";
   els.nextActionItems.innerHTML = "";
   els.nextActionItems.classList.add("hidden");
 
-  if (pendingCount > 0) {
-    els.nextAction.classList.add("needs-answer");
-    els.nextActionTitle.textContent =
-      state.language === "ko"
-        ? `${pendingCount}개 질문에 답변`
-        : `Answer ${pendingCount} question${pendingCount === 1 ? "" : "s"}`;
-    els.nextActionBody.textContent = t("writerNeedsInput");
-    els.nextActionItems.classList.remove("hidden");
-    const form = document.createElement("form");
-    form.className = "quick-answer-form";
-    for (const question of state.questions.filter((item) => item.status === "pending")) {
-      const item = document.createElement("div");
-      item.className = "quick-question";
-      const questionText =
-        typeof question.question.question === "string"
-          ? question.question.question
-          : JSON.stringify(question.question);
-      item.innerHTML = `
-        <p></p>
-        <input aria-label="${escapeHtml(t("answer"))}" placeholder="${escapeHtml(t("answer"))}" />
-      `;
-      item.querySelector("p").textContent = questionText;
-      const input = item.querySelector("input");
-      input.value = getAnswerDraft(question.id);
-      input.addEventListener("input", () => {
-        setAnswerDraft(question.id, input.value);
-      });
-      form.append(item);
-    }
-    const actions = document.createElement("div");
-    actions.className = "answer-batch-actions";
-    actions.innerHTML = `
-      <button type="submit">${escapeHtml(t("saveAnswersAndRun"))}</button>
-      <button type="button" class="secondary save-only">${escapeHtml(t("saveAllAnswers"))}</button>
+  if (pendingCount === 0) {
+    els.nextAction.classList.add("hidden");
+    return;
+  }
+
+  els.nextAction.classList.add("needs-answer");
+  els.nextActionTitle.textContent =
+    state.language === "ko"
+      ? `${pendingCount}개 질문에 답변`
+      : `Answer ${pendingCount} question${pendingCount === 1 ? "" : "s"}`;
+  els.nextActionBody.textContent = t("writerNeedsInput");
+  els.nextActionItems.classList.remove("hidden");
+  const form = document.createElement("form");
+  form.className = "quick-answer-form";
+  for (const question of state.questions.filter((item) => item.status === "pending")) {
+    const item = document.createElement("div");
+    item.className = "quick-question";
+    const questionText =
+      typeof question.question.question === "string"
+        ? question.question.question
+        : JSON.stringify(question.question);
+    item.innerHTML = `
+      <p></p>
+      <input aria-label="${escapeHtml(t("answer"))}" placeholder="${escapeHtml(t("answer"))}" />
     `;
-    actions.querySelector(".save-only").addEventListener("click", async () => {
-      await saveAllAnswers();
+    item.querySelector("p").textContent = questionText;
+    const input = item.querySelector("input");
+    input.value = getAnswerDraft(question.id);
+    input.addEventListener("input", () => {
+      setAnswerDraft(question.id, input.value);
     });
-    form.append(actions);
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      await saveAllAnswers({ startRun: true });
-    });
-    els.nextActionItems.append(form);
-    return;
+    form.append(item);
   }
-
-  if (project.status === "completed") {
-    els.nextAction.classList.add("complete");
-    els.nextActionTitle.textContent = t("reviewDraft");
-    els.nextActionBody.textContent = t("reviewDraftBody");
-    return;
-  }
-
-  if (project.status === "failed") {
-    els.nextAction.classList.add("failed");
-    els.nextActionTitle.textContent = t("pipelineFailed");
-    els.nextActionBody.textContent = t("pipelineFailedBody");
-    return;
-  }
-
-  if (project.status === "cancelled") {
-    els.nextAction.classList.add("needs-answer");
-    els.nextActionTitle.textContent = t("runCancelled");
-    els.nextActionBody.textContent = t("runCancelledBody");
-    return;
-  }
-
-  if (project.status === "running") {
-    els.nextActionTitle.textContent = t("writingInProgress");
-    els.nextActionBody.textContent = t("writingInProgressBody");
-    return;
-  }
-
-  els.nextActionTitle.textContent = t("startWritingAction");
-  els.nextActionBody.textContent = t("startWritingActionBody");
+  const actions = document.createElement("div");
+  actions.className = "answer-batch-actions";
+  actions.innerHTML = `
+    <button type="submit">${escapeHtml(t("saveAnswersAndRun"))}</button>
+    <button type="button" class="secondary save-only">${escapeHtml(t("saveAllAnswers"))}</button>
+  `;
+  actions.querySelector(".save-only").addEventListener("click", async () => {
+    await saveAllAnswers();
+  });
+  form.append(actions);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveAllAnswers({ startRun: true });
+  });
+  els.nextActionItems.append(form);
 }
 
 function renderTabs() {
@@ -2173,6 +2223,9 @@ function rerenderCurrentView() {
   renderDraftPreview();
   renderNextAction();
   renderTabs();
+  if (selectedProject()) {
+    applyLayoutPhase();
+  }
 }
 
 function toggleHidden(element) {
@@ -2183,6 +2236,7 @@ els.languageSelect?.addEventListener("change", () => {
   state.language = els.languageSelect.value === "ko" ? "ko" : "en";
   localStorage.setItem("docugenLanguage", state.language);
   rerenderCurrentView();
+  loadHealth().catch(() => {});
 });
 
 els.themeSelect?.addEventListener("change", () => {
@@ -2450,6 +2504,9 @@ els.projectForm.addEventListener("submit", async (event) => {
       }),
     });
     state.selectedProjectId = project.id;
+    // Sync the URL now, or loadProjects() re-selects the previous project
+    // from the stale ?project= param.
+    syncProjectInUrl(project.id);
 
     const referenceErrors = [];
     if (referenceUrls.length) {
@@ -2477,6 +2534,7 @@ els.projectForm.addEventListener("submit", async (event) => {
 
     els.projectForm.reset();
     els.projectForm.classList.add("hidden");
+    closeSidebarOnNarrow();
     if (referenceErrors.length) {
       showToast(t("referencesFailed", { errors: referenceErrors.join(" / ") }), true);
     } else {

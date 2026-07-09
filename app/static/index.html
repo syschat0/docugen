@@ -111,12 +111,6 @@
                   <h2 id="detailTitle"></h2>
                   <p id="detailMeta"></p>
                 </div>
-                <div class="hero-actions">
-                  <span id="detailStatus" class="status-pill"></span>
-                  <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
-                  <button id="cancelButton" type="button" class="danger hidden" data-i18n="cancelWriting">Cancel writing</button>
-                  <button id="deleteProjectButton" type="button" class="danger" data-i18n="delete">Delete</button>
-                </div>
               </div>
 
               <details id="requestDetails" class="hero-request">
@@ -268,6 +262,19 @@
               </details>
             </section>
 
+            <div id="statusStrip" class="status-strip" aria-live="polite">
+              <span id="detailStatus" class="status-pill"></span>
+              <span id="stripMessage" class="strip-message"></span>
+              <div id="stripProgress" class="strip-progress hidden">
+                <div class="strip-track"><div id="stripFill" class="strip-fill"></div></div>
+                <span id="stripPercent" class="strip-percent"></span>
+              </div>
+              <div class="strip-actions">
+                <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
+                <button id="cancelButton" type="button" class="danger hidden" data-i18n="cancelWriting">Cancel writing</button>
+              </div>
+            </div>
+
             <section id="nextAction" class="next-action" aria-live="polite">
               <div class="next-action-head">
                 <p class="eyebrow" data-i18n="nextAction">Next Action</p>
@@ -277,16 +284,17 @@
               <div id="nextActionItems" class="next-action-items hidden"></div>
             </section>
 
-            <section class="progress-panel" aria-label="Writing progress">
-              <div class="section-head">
+            <details id="pipelinePanel" class="progress-panel" aria-label="Writing progress">
+              <summary class="section-head pipeline-head">
                 <h3 data-i18n="pipeline">Pipeline</h3>
+                <span id="pipelineSummaryText" class="pipeline-summary-text"></span>
                 <span id="progressPercent">0%</span>
-              </div>
+              </summary>
               <div class="progress-track">
                 <div id="progressFill" class="progress-fill"></div>
               </div>
               <div id="progressSteps" class="progress-steps" aria-live="polite"></div>
-            </section>
+            </details>
 
             <section class="draft-panel" aria-label="Draft preview">
               <div class="section-head">
@@ -378,6 +386,10 @@
                   <span id="pipelineStatus" data-i18n="idle">Idle</span>
                 </div>
                 <div id="pipelineList" class="list" aria-live="polite"></div>
+              </div>
+
+              <div class="details-footer">
+                <button id="deleteProjectButton" type="button" class="danger" data-i18n="deleteProject">Delete project</button>
               </div>
             </details>
           </div>
