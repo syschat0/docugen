@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.db import repositories
 from app.schemas.projects import ProjectRead
+from app.services import search_options
 
 
 def _project(created_at="2026-01-01T00:00:00+00:00") -> ProjectRead:
@@ -87,6 +88,46 @@ class TestEffectiveCitationStyle:
             repositories, "settings", SimpleNamespace(citation_style="bogus")
         )
         assert repositories.effective_citation_style("p1") == "numeric"
+
+
+class TestEffectiveSearchOptions:
+    _GLOBAL = SimpleNamespace(
+        search_engine="daum",
+        search_headless=True,
+        search_stealth=False,
+        search_locale="ko-KR",
+        search_query_language="native",
+    )
+
+    def test_overrides_take_precedence(self, monkeypatch):
+        monkeypatch.setattr(
+            repositories,
+            "get_project_settings",
+            lambda pid: {
+                "search_engines": ["bing", "daum"],
+                "search_headless": False,
+                "search_stealth": True,
+                "search_locale": "en-US",
+                "search_query_language": "both",
+            },
+        )
+        monkeypatch.setattr(search_options, "settings", self._GLOBAL)
+        opts = repositories.effective_search_options("p1")
+        assert opts.engines == ("bing", "daum")
+        assert opts.headless is False
+        assert opts.stealth is True
+        assert opts.locale == "en-US"
+        assert opts.query_language == "both"
+
+    def test_none_falls_back_to_global(self, monkeypatch):
+        monkeypatch.setattr(repositories, "get_project_settings", lambda pid: {})
+        monkeypatch.setattr(search_options, "settings", self._GLOBAL)
+        opts = repositories.effective_search_options("p1")
+        assert opts.engines == ("daum",)
+        assert opts.headless is True
+        assert opts.stealth is False
+        assert opts.locale == "ko-KR"
+        assert opts.query_language == "native"
 
 
 class TestDecisionCutoff:

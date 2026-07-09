@@ -47,6 +47,25 @@ class ProjectSettingsUpdate(BaseModel):
     # Total body-length budget in characters; None lets the brief-extracted
     # length (or no budget) apply.
     target_length: int | None = Field(default=None, ge=100, le=200000)
+    # Browser-search knobs (also settable via env; see app/core/config.py).
+    # search_engines is a priority list tried in order (fallback on block/error).
+    search_engines: list[Literal["daum", "bing", "google"]] | None = None
+    search_headless: bool | None = None
+    search_stealth: bool | None = None
+    search_locale: Literal["ko-KR", "en-US"] | None = None
+    search_query_language: Literal["native", "english", "both"] | None = None
+
+    @field_validator("search_engines")
+    @classmethod
+    def _dedupe_engines(cls, value: list[str] | None) -> list[str] | None:
+        """Drop duplicates (keep order); an empty list means "use default"."""
+        if not value:
+            return None
+        deduped: list[str] = []
+        for engine in value:
+            if engine not in deduped:
+                deduped.append(engine)
+        return deduped or None
 
 
 class ProjectSettingsRead(BaseModel):
@@ -54,8 +73,13 @@ class ProjectSettingsRead(BaseModel):
     section_search_enabled: bool | None = None
     citation_style: str | None = None
     target_length: int | None = None
+    search_engines: list[str] | None = None
+    search_headless: bool | None = None
+    search_stealth: bool | None = None
+    search_locale: str | None = None
+    search_query_language: str | None = None
     # Global env defaults, so the UI can show what "use default" resolves to.
-    defaults: dict[str, bool | str]
+    defaults: dict[str, bool | str | list[str]]
 
 
 class ProjectRead(BaseModel):

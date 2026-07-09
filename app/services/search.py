@@ -383,18 +383,33 @@ def build_section_query(section: dict[str, Any]) -> str:
     return _truncate_at_word(title, _MAX_QUERY_CHARS)
 
 
+def _plan_section_query(section: dict[str, Any]) -> str:
+    """LLM-generated query for a section, falling back to the template."""
+    if settings.llm_enabled:
+        from app.services.llm import LLMError, plan_section_query
+
+        try:
+            query, _usage = plan_section_query(section)
+            if query:
+                return query
+        except LLMError:
+            pass
+    return build_section_query(section)
+
+
 def search_section_sources(
     section: dict[str, Any], limit: int
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], str | None, str]:
     """Top-up search for one section whose planned sources are irrelevant.
 
-    The only caller already gates on the project's effective search setting, so
-    this does not re-check the global flag (which could differ from a per-project
-    override).
+    Uses an LLM-generated query (template fallback). The only caller already
+    gates on the project's effective search setting, so this does not re-check
+    the global flag (which could differ from a per-project override). Returns
+    (sources, error, query_used).
     """
-    query = build_section_query(section)
+    query = _plan_section_query(section)
     if not query:
-        return [], None
+        return [], None, ""
 
     results: list[dict[str, str]] = []
     error: str | None = None
@@ -425,7 +440,7 @@ def search_section_sources(
         for result in results
         if result.get("url")
     ]
-    return sources, (None if sources else error)
+    return sources, (None if sources else error), query
 
 
 def _summaries_via_browser(results: list[dict[str, Any]]) -> list[dict[str, str]]:

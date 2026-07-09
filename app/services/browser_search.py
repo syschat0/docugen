@@ -1,12 +1,14 @@
 """Headless-browser search backend.
 
-Drives a real browser via Playwright against a configurable engine
-(SEARCH_ENGINE, see _ENGINES). Real browser builds (Chrome/Edge
-channels) pass bot checks that block plain HTTP clients and bundled
-Chromium; DuckDuckGo, Google, Ecosia, and Mojeek block even those, so
-the supported engines are Daum (best Korean results) and Bing. Source
-pages are also fetched with the browser so JS-rendered sites can be
-summarized.
+Drives a real browser via Playwright against an engine priority list
+(SEARCH_ENGINE, comma-separated; see _ENGINES). Engines are tried in order
+and, on a bot challenge or error, the next engine takes over. Real browser
+builds (Chrome/Edge channels) plus stealth pass bot checks that block plain
+HTTP clients and bundled Chromium. Daum gives the best Korean results and
+Bing is a reliable fallback; Google is supported but blocks aggressively and
+its result-page selectors are brittle, so it is best used as a first choice
+with Bing/Daum behind it in the priority list. Source pages are also fetched
+with the browser so JS-rendered sites can be summarized.
 """
 
 import base64
@@ -15,6 +17,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 from app.core.config import settings
 from app.services.page_meta import interpret_page_meta
+from app.services.search_options import current_search_options
 
 
 class BrowserSearchError(Exception):
@@ -30,6 +33,10 @@ _CHALLENGE_MARKERS = (
     "마지막 한 단계",
     "solve the challenge",
     "verify you are human",
+    # Google's block / CAPTCHA interstitials.
+    "unusual traffic",
+    "our systems have detected",
+    "not a robot",
 )
 
 
@@ -55,6 +62,19 @@ _EXTRACT_DAUM_JS = """
   const snippet = node.querySelector("p.conts-desc, .desc, p");
   return {
     title: link ? (link.textContent || "").trim() : "",
+    url: link ? link.href : "",
+    snippet: snippet ? (snippet.textContent || "").trim() : "",
+  };
+}).filter((item) => item.title && item.url)
+"""
+
+_EXTRACT_GOOGLE_JS = """
+(nodes) => nodes.map((node) => {
+  const link = node.querySelector("a[href]");
+  const title = node.querySelector("h3");
+  const snippet = node.querySelector("div[data-sncf], .VwiC3b, .IsZvec");
+  return {
+    title: title ? (title.textContent || "").trim() : "",
     url: link ? link.href : "",
     snippet: snippet ? (snippet.textContent || "").trim() : "",
   };
@@ -90,14 +110,34 @@ _EXTRACT_PAGE_TEXT_JS = """
 _ENGINES: dict[str, dict] = {}
 
 
-def _engine_config() -> dict:
-    config = _ENGINES.get(settings.search_engine)
+def _engine_config(engine: str) -> dict:
+    config = _ENGINES.get(engine)
     if config is None:
         available = ", ".join(sorted(_ENGINES))
         raise BrowserSearchError(
-            f"Unknown SEARCH_ENGINE '{settings.search_engine}' (available: {available})"
+            f"Unknown SEARCH_ENGINE '{engine}' (available: {available})"
         )
     return config
+
+
+def _engine_priority(engines: tuple[str, ...]) -> list[tuple[str, dict]]:
+    """Resolve an engine priority list to (name, config) pairs in order.
+
+    Unknown engine names are dropped; raises if none are usable.
+    """
+    resolved: list[tuple[str, dict]] = []
+    chosen: set[str] = set()
+    for name in engines:
+        config = _ENGINES.get(name)
+        if config is not None and name not in chosen:
+            resolved.append((name, config))
+            chosen.add(name)
+    if not resolved:
+        available = ", ".join(sorted(_ENGINES))
+        raise BrowserSearchError(
+            f"No usable search engine in {list(engines)} (available: {available})"
+        )
+    return resolved
 
 
 def decode_bing_url(href: str) -> str:
@@ -118,6 +158,17 @@ def decode_bing_url(href: str) -> str:
     return href
 
 
+def decode_google_url(href: str) -> str:
+    # Organic Google results are usually direct links, but some are wrapped in
+    # a /url?q=<real> redirect.
+    parsed = urlparse(href)
+    if parsed.netloc.endswith("google.com") and parsed.path == "/url":
+        target = parse_qs(parsed.query).get("q", [""])[0]
+        if target.startswith(("http://", "https://")):
+            return target
+    return href
+
+
 _ENGINES.update(
     {
         "daum": {
@@ -132,6 +183,14 @@ _ENGINES.update(
             "extract_js": _EXTRACT_BING_JS,
             "decode_url": decode_bing_url,
         },
+        # Google blocks aggressively and its markup is obfuscated/volatile, so
+        # these selectors are best-effort; the priority fallback covers misses.
+        "google": {
+            "url_template": "https://www.google.com/search?q={query}",
+            "result_selector": "div.tF2Cxc, div.g",
+            "extract_js": _EXTRACT_GOOGLE_JS,
+            "decode_url": decode_google_url,
+        },
     }
 )
 
@@ -141,7 +200,7 @@ def _launch_browser(playwright):
     for channel in _BROWSER_CHANNELS:
         try:
             return playwright.chromium.launch(
-                headless=True,
+                headless=current_search_options().headless,
                 channel=channel,
                 args=["--disable-blink-features=AutomationControlled"],
             )
@@ -149,6 +208,43 @@ def _launch_browser(playwright):
             last_error = exc
     raise BrowserSearchError(
         f"No usable browser found (install Chrome/Edge or run 'playwright install chromium'): {last_error}"
+    )
+
+
+def _apply_stealth(page) -> None:
+    """Patch a page with playwright-stealth when SEARCH_STEALTH is enabled.
+
+    Stealth masks the automation fingerprints (navigator.webdriver, headless
+    quirks) that engines use to serve bot challenges. Opt-in: it adds a
+    dependency and a small per-page cost. Supports both the 1.x module-level
+    helper and the 2.x Stealth class entry points.
+    """
+    if not current_search_options().stealth:
+        return
+    try:
+        import playwright_stealth as stealth
+    except ImportError as exc:
+        raise BrowserSearchError(
+            "SEARCH_STEALTH is on but playwright-stealth is not installed "
+            "(pip install playwright-stealth)"
+        ) from exc
+
+    apply = getattr(stealth, "stealth_sync", None)  # playwright-stealth 1.x
+    if callable(apply):
+        apply(page)
+        return
+    stealth_cls = getattr(stealth, "Stealth", None)  # playwright-stealth 2.x
+    if stealth_cls is not None:
+        instance = stealth_cls()
+        method = getattr(instance, "apply_stealth_sync", None) or getattr(
+            instance, "apply_sync", None
+        )
+        if callable(method):
+            method(page)
+            return
+    raise BrowserSearchError(
+        "playwright-stealth is installed but exposes no known stealth API "
+        "(check its version)"
     )
 
 
@@ -202,21 +298,54 @@ def _run_search_query(page, config: dict, query: str, timeout_ms: int) -> list[d
     return []
 
 
+def _search_query_with_fallback(
+    page,
+    engine_priority: list[tuple[str, dict]],
+    blocked: set[str],
+    query: str,
+    timeout_ms: int,
+) -> tuple[str | None, dict | None, list[dict[str, str]], str | None]:
+    """Try each non-blocked engine in priority order for one query.
+
+    Fallback happens on a bot challenge or an engine error, NOT on a valid
+    empty result (the first engine that answers wins, even with zero hits). A
+    challenge marks that engine blocked for the rest of the session so later
+    queries skip it. Returns (engine_name, config, items, error): items may be
+    empty on success; on total failure returns (None, None, [], last_error).
+    """
+    last_error: str | None = None
+    for name, config in engine_priority:
+        if name in blocked:
+            continue
+        try:
+            items = _run_search_query(page, config, query, timeout_ms)
+        except SearchChallengeError:
+            blocked.add(name)  # engine-level block for the rest of the run
+            last_error = f"{name}: rate-limit challenge"
+            continue
+        except Exception as exc:
+            last_error = f"{name}: {type(exc).__name__}: {exc}"
+            continue
+        return name, config, items, None
+    return None, None, [], last_error
+
+
 def search_with_browser(
     queries: list[str], max_results: int
 ) -> tuple[list[dict[str, str]], list[str]]:
-    """Run each query on the configured engine in a headless real browser.
+    """Run each query against the engine priority list in a real browser.
 
     Returns (deduped results, per-query error messages).
     """
     sync_playwright = _sync_playwright()
-    config = _engine_config()
-    decode_url = config.get("decode_url") or (lambda href: href)
+    options = current_search_options()
+    engine_priority = _engine_priority(options.engines)
     timeout_ms = settings.search_timeout_seconds * 1000
     results: list[dict[str, str]] = []
     extras: list[dict[str, str]] = []
     errors: list[str] = []
     seen: set[str] = set()
+    blocked: set[str] = set()
     # Spread the result budget across queries so one query (possibly
     # relaxed by the engine into something broader) cannot fill it alone.
     per_query_cap = max(2, -(-max_results // max(len(queries), 1)))
@@ -225,28 +354,26 @@ def search_with_browser(
         browser = _launch_browser(playwright)
         try:
             context = browser.new_context(
-                locale="ko-KR",
+                locale=options.locale,
                 viewport={"width": 1280, "height": 900},
             )
             page = context.new_page()
+            _apply_stealth(page)
             for index, query in enumerate(queries):
                 if len(results) >= max_results:
                     break
                 if index > 0:
                     page.wait_for_timeout(1000)
-                try:
-                    items = _run_search_query(page, config, query, timeout_ms)
-                except SearchChallengeError as exc:
-                    # The whole session is rate-limited; further queries
-                    # would only extend the block.
-                    errors.append(f"{query}: {exc}")
-                    break
-                except Exception as exc:
-                    errors.append(f"{query}: {type(exc).__name__}: {exc}")
+                name, config, items, error = _search_query_with_fallback(
+                    page, engine_priority, blocked, query, timeout_ms
+                )
+                if name is None:
+                    errors.append(f"{query}: {error or 'all engines failed'}")
                     continue
                 if not items:
-                    errors.append(f"{query}: no results extracted")
+                    errors.append(f"{query}: no results extracted ({name})")
                     continue
+                decode_url = config.get("decode_url") or (lambda href: href)
                 taken = 0
                 for item in items:
                     url = decode_url(item.get("url", ""))
@@ -279,47 +406,42 @@ def search_grouped(
 ) -> list[dict[str, object]]:
     """Run each query in one shared browser session, keeping results per query.
 
-    Returns one entry per query: {"query", "results", "error"}.
+    Each query independently walks the engine priority list, so a challenge on
+    one engine drops to the next. Returns one entry per query:
+    {"query", "results", "error"}.
     """
     sync_playwright = _sync_playwright()
-    config = _engine_config()
-    decode_url = config.get("decode_url") or (lambda href: href)
+    options = current_search_options()
+    engine_priority = _engine_priority(options.engines)
     timeout_ms = settings.search_timeout_seconds * 1000
     grouped: list[dict[str, object]] = []
+    blocked: set[str] = set()
 
     with sync_playwright() as playwright:
         browser = _launch_browser(playwright)
         try:
             context = browser.new_context(
-                locale="ko-KR",
+                locale=options.locale,
                 viewport={"width": 1280, "height": 900},
             )
             page = context.new_page()
+            _apply_stealth(page)
             for index, query in enumerate(queries):
                 if index > 0:
                     page.wait_for_timeout(1000)
-                try:
-                    items = _run_search_query(page, config, query, timeout_ms)
-                except SearchChallengeError as exc:
-                    grouped.append({"query": query, "results": [], "error": str(exc)})
-                    for skipped in queries[index + 1 :]:
-                        grouped.append(
-                            {
-                                "query": skipped,
-                                "results": [],
-                                "error": "skipped after rate-limit challenge",
-                            }
-                        )
-                    break
-                except Exception as exc:
+                name, config, items, error = _search_query_with_fallback(
+                    page, engine_priority, blocked, query, timeout_ms
+                )
+                if name is None:
                     grouped.append(
                         {
                             "query": query,
                             "results": [],
-                            "error": f"{type(exc).__name__}: {exc}",
+                            "error": error or "all engines failed",
                         }
                     )
                     continue
+                decode_url = config.get("decode_url") or (lambda href: href)
                 results: list[dict[str, str]] = []
                 seen: set[str] = set()
                 for item in items:
@@ -340,7 +462,7 @@ def search_grouped(
                     {
                         "query": query,
                         "results": results,
-                        "error": None if results else "no results extracted",
+                        "error": None if results else f"no results extracted ({name})",
                     }
                 )
         finally:
@@ -369,10 +491,11 @@ def fetch_page_texts(urls: list[str]) -> list[dict[str, str]]:
         browser = _launch_browser(playwright)
         try:
             context = browser.new_context(
-                locale="ko-KR",
+                locale=current_search_options().locale,
                 viewport={"width": 1280, "height": 900},
             )
             page = context.new_page()
+            _apply_stealth(page)
             for url in urls:
                 entry = {"url": url, "title": "", "text": "", "error": ""}
                 try:

@@ -27,6 +27,7 @@ from app.schemas.projects import (
     ReferenceUrlsCreate,
 )
 from app.services.doc_types import get_doc_type_profile
+from app.services.search_options import default_search_options
 from app.services.references import (
     MAX_FILE_BYTES,
     MAX_REFERENCE_COUNT,
@@ -84,6 +85,11 @@ def get_project_settings_endpoint(project_id: str) -> ProjectSettingsRead:
         section_search_enabled=stored.get("section_search_enabled"),
         citation_style=stored.get("citation_style"),
         target_length=stored.get("target_length"),
+        search_engines=stored.get("search_engines"),
+        search_headless=stored.get("search_headless"),
+        search_stealth=stored.get("search_stealth"),
+        search_locale=stored.get("search_locale"),
+        search_query_language=stored.get("search_query_language"),
         defaults={
             # "Use default" resolves through the document-type profile, so
             # the UI shows what this project would actually do.
@@ -91,6 +97,11 @@ def get_project_settings_endpoint(project_id: str) -> ProjectSettingsRead:
             and bool(profile.get("research_default", True)),
             "section_search_enabled": settings.section_search_enabled,
             "citation_style": settings.citation_style,
+            "search_engines": list(default_search_options().engines),
+            "search_headless": settings.search_headless,
+            "search_stealth": settings.search_stealth,
+            "search_locale": settings.search_locale,
+            "search_query_language": settings.search_query_language,
         },
     )
 
@@ -107,15 +118,26 @@ def update_project_settings_endpoint(
         "section_search_enabled": payload.section_search_enabled,
         "citation_style": payload.citation_style,
         "target_length": payload.target_length,
+        "search_engines": payload.search_engines,
+        "search_headless": payload.search_headless,
+        "search_stealth": payload.search_stealth,
+        "search_locale": payload.search_locale,
+        "search_query_language": payload.search_query_language,
     }
     # A run-affecting setting changed, so invalidate stale artifacts on next run.
     # citation_style is deliberately excluded: it only changes how the final
     # merge renders citations, so cached section drafts stay valid and a style
-    # change just re-merges on the next run.
+    # change just re-merges on the next run. The search knobs change which
+    # sources a run finds, so they DO invalidate.
     changed = (
         stored.get("search_enabled") != payload.search_enabled
         or stored.get("section_search_enabled") != payload.section_search_enabled
         or stored.get("target_length") != payload.target_length
+        or stored.get("search_engines") != payload.search_engines
+        or stored.get("search_headless") != payload.search_headless
+        or stored.get("search_stealth") != payload.search_stealth
+        or stored.get("search_locale") != payload.search_locale
+        or stored.get("search_query_language") != payload.search_query_language
     )
     set_project_settings(project_id, updated)
     if changed:

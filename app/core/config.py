@@ -29,7 +29,9 @@ class Settings:
     search_enabled: bool = _bool_env("SEARCH_ENABLED", "true")
     # "auto": headless browser first, HTTP fallback. "browser" / "http": that backend only.
     search_backend: str = os.getenv("SEARCH_BACKEND", "auto").strip().lower()
-    # Engine for the browser backend; see _ENGINES in services/browser_search.py.
+    # Browser-backend engine priority, comma-separated (e.g. "google,bing,daum").
+    # Engines are tried in order; on a bot challenge or error the next one is
+    # used. See _ENGINES in services/browser_search.py.
     search_engine: str = os.getenv("SEARCH_ENGINE", "daum").strip().lower()
     search_max_results: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
     chapter_search_results: int = int(os.getenv("CHAPTER_SEARCH_RESULTS", "2"))
@@ -46,6 +48,20 @@ class Settings:
     # changing it never invalidates cached pipeline artifacts.
     citation_style: str = os.getenv("CITATION_STYLE", "numeric").strip().lower()
     search_timeout_seconds: int = int(os.getenv("SEARCH_TIMEOUT_SECONDS", "15"))
+    # Browser-search runtime controls. Headless is the safe default; running
+    # headed (SEARCH_HEADLESS=false) plus stealth (SEARCH_STEALTH=true) helps
+    # get past engines that block automated/headless browsers, but headed needs
+    # a display and pops a window per search. Stealth needs playwright-stealth.
+    search_headless: bool = _bool_env("SEARCH_HEADLESS", "true")
+    search_stealth: bool = _bool_env("SEARCH_STEALTH", "false")
+    # Browser context locale; drives the engine's result language.
+    search_locale: str = os.getenv("SEARCH_LOCALE", "ko-KR")
+    # Search-query language: "native" (request language), "english", or "both"
+    # (a mix, so results span e.g. Korean and English sources). Pairs well with
+    # a bilingual engine priority and SEARCH_LOCALE.
+    search_query_language: str = os.getenv(
+        "SEARCH_QUERY_LANGUAGE", "native"
+    ).strip().lower()
 
 
 settings = Settings()

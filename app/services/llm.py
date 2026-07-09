@@ -10,6 +10,7 @@ from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
 from app.services.citations import citation_markers
 from app.services.doc_types import DEFAULT_DOC_TYPE, DOC_TYPES, get_doc_type_profile
+from app.services.search_options import current_search_options
 
 
 class LLMError(Exception):
@@ -576,9 +577,32 @@ Return this exact JSON shape:
     return questions, usage
 
 
+def _query_language_instruction(*, multi: bool, subject: str) -> str:
+    """Prompt line pinning the search-query language to SEARCH_QUERY_LANGUAGE."""
+    mode = current_search_options().query_language
+    noun = "queries" if multi else "query"
+    if mode == "english":
+        return (
+            f"Write the {noun} in English, translating key terms if {subject} is "
+            "in another language."
+        )
+    if mode == "both":
+        if multi:
+            return (
+                "Write about half of the queries in the same language as the "
+                "request and the rest in English, so the results span both languages."
+            )
+        return (
+            f"Write the query in whichever language — that of {subject}, or "
+            "English — will surface the most useful sources for this topic."
+        )
+    return f"Write the {noun} in the same language as {subject}."
+
+
 def plan_search_queries(
     project: ProjectRead, decisions: list[UserDecisionRead]
 ) -> tuple[list[str], dict[str, Any] | None]:
+    language_instruction = _query_language_instruction(multi=True, subject="the request")
     parsed, usage = _json_chat(
         "You create short web search queries for document research. Return only valid JSON.",
         f"""
@@ -592,9 +616,8 @@ User answers and decisions:
 {_decision_lines(decisions)}
 
 Create 2 to 4 short web search queries (3 to 8 words each) that would find
-useful reference sources for this document. Write the queries in the same
-language as the request. Extract key search terms; do not copy full sentences
-or question text from the request.
+useful reference sources for this document. {language_instruction} Extract key
+search terms; do not copy full sentences or question text from the request.
 
 Return this exact JSON shape:
 {{
@@ -623,6 +646,9 @@ def plan_chapter_query(
 ) -> tuple[str, dict[str, Any] | None]:
     """One tiny call per chapter: a failed query only loses that chapter."""
     chapter_title = str(chapter.get("title", ""))
+    language_instruction = _query_language_instruction(
+        multi=False, subject="the chapter title"
+    )
     parsed, usage = _json_chat(
         "You create one short web search query for document research. Return only valid JSON.",
         f"""
@@ -633,9 +659,9 @@ Chapter title:
 {chapter_title}
 
 Create one short web search query (2 to 6 keywords) that would find useful
-reference material for this chapter. Write the query in the same language as
-the chapter title. Use searchable keywords, not a full sentence; do not copy
-the chapter title verbatim if it reads like a sentence.
+reference material for this chapter. {language_instruction} Use searchable
+keywords, not a full sentence; do not copy the chapter title verbatim if it
+reads like a sentence.
 
 Return this JSON shape:
 {{
@@ -646,6 +672,45 @@ Return this JSON shape:
     query = " ".join(str(parsed.get("query", "")).split())[:100].strip()
     if not query:
         raise LLMError("LLM chapter query response missing query")
+    return query, usage
+
+
+def plan_section_query(
+    section: Dict[str, Any]
+) -> tuple[str, dict[str, Any] | None]:
+    """One tiny query for a single leaf section (top-up research)."""
+    title = str(section.get("title", ""))
+    key_points = [
+        str(point).strip()
+        for point in (section.get("key_points") or [])
+        if str(point).strip()
+    ]
+    language_instruction = _query_language_instruction(
+        multi=False, subject="the section title"
+    )
+    key_point_lines = "\n".join(f"- {point}" for point in key_points) or "(none)"
+    parsed, usage = _json_chat(
+        "You create one short web search query for document research. Return only valid JSON.",
+        f"""
+Section title:
+{title}
+
+Key points:
+{key_point_lines}
+
+Create one short web search query (2 to 6 keywords) that would find useful
+reference material for this section. {language_instruction} Use searchable
+keywords, not a full sentence.
+
+Return this JSON shape:
+{{
+  "query": ""
+}}
+""",
+    )
+    query = " ".join(str(parsed.get("query", "")).split())[:100].strip()
+    if not query:
+        raise LLMError("LLM section query response missing query")
     return query, usage
 
 

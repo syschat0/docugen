@@ -97,6 +97,9 @@ const translations = {
     projectDeleted: "Project deleted.",
     projects: "Projects",
     query: "Query",
+    queries: "Queries",
+    querySource: "Query source",
+    topupSearches: "Section top-up searches",
     question: "Question",
     referenceFiles: "Attachments (.txt, .md)",
     referenceUrls: "Reference URLs (one per line)",
@@ -111,6 +114,17 @@ const translations = {
     runConditions: "Run conditions",
     externalSearch: "External search",
     sectionSearch: "Section top-up search",
+    searchEngine1: "Search engine (1st)",
+    searchEngine2: "Search engine (2nd)",
+    searchEngine3: "Search engine (3rd)",
+    engineNone: "None",
+    searchHeadless: "Headless browser",
+    searchStealth: "Stealth mode",
+    searchLocale: "Result locale",
+    searchQueryLanguage: "Query language",
+    queryLangNative: "Request language",
+    queryLangEnglish: "English",
+    queryLangBoth: "Mixed (KR + EN)",
     docType: "Document type",
     autoDetect: "Auto detect",
     docTypeSaved: "Document type saved. The next run will rewrite the document.",
@@ -284,6 +298,9 @@ const translations = {
     projectDeleted: "프로젝트를 삭제했습니다.",
     projects: "프로젝트",
     query: "검색어",
+    queries: "검색어 목록",
+    querySource: "검색어 출처",
+    topupSearches: "섹션 보강 검색",
     question: "질문",
     referenceFiles: "첨부 파일 (.txt, .md)",
     referenceUrls: "참고 URL (한 줄에 하나)",
@@ -298,6 +315,17 @@ const translations = {
     runConditions: "생성 조건",
     externalSearch: "외부 검색",
     sectionSearch: "섹션 보강 검색",
+    searchEngine1: "검색 엔진 (1순위)",
+    searchEngine2: "검색 엔진 (2순위)",
+    searchEngine3: "검색 엔진 (3순위)",
+    engineNone: "없음",
+    searchHeadless: "헤드리스 브라우저",
+    searchStealth: "스텔스 모드",
+    searchLocale: "결과 로케일",
+    searchQueryLanguage: "검색어 언어",
+    queryLangNative: "요청 언어",
+    queryLangEnglish: "영어",
+    queryLangBoth: "혼합 (한+영)",
     docType: "문서 유형",
     autoDetect: "자동 감지",
     docTypeSaved: "문서 유형을 저장했습니다. 다음 실행 시 문서를 새로 작성합니다.",
@@ -470,6 +498,13 @@ const els = {
   addReferenceFilesButton: document.querySelector("#addReferenceFilesButton"),
   searchEnabledSelect: document.querySelector("#searchEnabledSelect"),
   sectionSearchSelect: document.querySelector("#sectionSearchSelect"),
+  searchEngine1Select: document.querySelector("#searchEngine1Select"),
+  searchEngine2Select: document.querySelector("#searchEngine2Select"),
+  searchEngine3Select: document.querySelector("#searchEngine3Select"),
+  searchHeadlessSelect: document.querySelector("#searchHeadlessSelect"),
+  searchStealthSelect: document.querySelector("#searchStealthSelect"),
+  searchLocaleSelect: document.querySelector("#searchLocaleSelect"),
+  searchQueryLanguageSelect: document.querySelector("#searchQueryLanguageSelect"),
   citationStyleSelect: document.querySelector("#citationStyleSelect"),
   targetLengthInput: document.querySelector("#targetLengthInput"),
   projectDocType: document.querySelector("#projectDocType"),
@@ -1049,6 +1084,28 @@ function renderProjectSettings() {
   if (els.sectionSearchSelect) {
     els.sectionSearchSelect.value = settingToSelectValue(config.section_search_enabled);
   }
+  const engines = Array.isArray(config.search_engines) ? config.search_engines : [];
+  if (els.searchEngine1Select) {
+    els.searchEngine1Select.value = engines[0] || "default";
+  }
+  if (els.searchEngine2Select) {
+    els.searchEngine2Select.value = engines[1] || "none";
+  }
+  if (els.searchEngine3Select) {
+    els.searchEngine3Select.value = engines[2] || "none";
+  }
+  if (els.searchHeadlessSelect) {
+    els.searchHeadlessSelect.value = settingToSelectValue(config.search_headless);
+  }
+  if (els.searchStealthSelect) {
+    els.searchStealthSelect.value = settingToSelectValue(config.search_stealth);
+  }
+  if (els.searchLocaleSelect) {
+    els.searchLocaleSelect.value = config.search_locale || "default";
+  }
+  if (els.searchQueryLanguageSelect) {
+    els.searchQueryLanguageSelect.value = config.search_query_language || "default";
+  }
   if (els.citationStyleSelect) {
     els.citationStyleSelect.value = config.citation_style || "default";
   }
@@ -1063,6 +1120,25 @@ async function saveProjectSettings() {
   if (!project) return;
   const citationStyle = els.citationStyleSelect?.value;
   const targetLengthRaw = parseInt(els.targetLengthInput?.value, 10);
+  const searchLocale = els.searchLocaleSelect?.value;
+  const queryLanguage = els.searchQueryLanguageSelect?.value;
+  const engineSlots = [
+    els.searchEngine1Select?.value,
+    els.searchEngine2Select?.value,
+    els.searchEngine3Select?.value,
+  ];
+  // Slot 1 "default" means "use the global default" (send null). Otherwise
+  // build the priority list from the slots, skipping none/default + dupes.
+  let searchEngines = null;
+  if (engineSlots[0] && engineSlots[0] !== "default") {
+    searchEngines = [];
+    for (const slot of engineSlots) {
+      if (slot && slot !== "default" && slot !== "none" && !searchEngines.includes(slot)) {
+        searchEngines.push(slot);
+      }
+    }
+    if (searchEngines.length === 0) searchEngines = null;
+  }
   const payload = {
     search_enabled: selectValueToSetting(els.searchEnabledSelect.value),
     section_search_enabled: selectValueToSetting(els.sectionSearchSelect.value),
@@ -1070,6 +1146,11 @@ async function saveProjectSettings() {
     target_length: Number.isFinite(targetLengthRaw) && targetLengthRaw > 0
       ? Math.min(Math.max(targetLengthRaw, 100), 200000)
       : null,
+    search_engines: searchEngines,
+    search_headless: selectValueToSetting(els.searchHeadlessSelect.value),
+    search_stealth: selectValueToSetting(els.searchStealthSelect.value),
+    search_locale: searchLocale === "default" ? null : searchLocale || null,
+    search_query_language: queryLanguage === "default" ? null : queryLanguage || null,
   };
   try {
     state.projectSettings = await api(`/projects/${project.id}/settings`, {
@@ -1288,13 +1369,22 @@ function renderStepDetails(step) {
   }
 
   switch (step.phase) {
-    case "research":
+    case "research": {
+      const researchQueries =
+        details.queries && details.queries.length
+          ? details.queries
+          : details.query
+            ? [details.query]
+            : [];
       return [
         renderKeyValueList([
-          [t("query"), details.query],
+          [t("querySource"), details.query_source],
           [t("sources"), details.source_count],
           [t("searchError"), details.error],
         ]),
+        researchQueries.length
+          ? `<p class="item-meta">${escapeHtml(t("queries"))}</p>${renderBullets(researchQueries)}`
+          : "",
         details.sources?.length
           ? `<ul>${details.sources
               .map(
@@ -1304,6 +1394,7 @@ function renderStepDetails(step) {
               .join("")}</ul>`
           : "",
       ].join("");
+    }
     case "source_summary":
       return [
         renderKeyValueList([[t("sourceSummaries"), details.source_summary_count]]),
@@ -1374,6 +1465,14 @@ function renderStepDetails(step) {
           [t("chapterDigests"), details.chapter_digest_count],
           [t("glossary"), (details.glossary_terms || []).join(", ")],
         ]),
+        details.topup_searches?.length
+          ? `<p class="item-meta">${escapeHtml(t("topupSearches"))}</p><ul>${details.topup_searches
+              .map(
+                (s) =>
+                  `<li>${escapeHtml(s.query || "-")} · ${escapeHtml(t("sources"))}: ${escapeHtml(s.source_count ?? 0)}${s.error ? ` · ${escapeHtml(t("searchError"))}: ${escapeHtml(s.error)}` : ""}</li>`,
+              )
+              .join("")}</ul>`
+          : "",
         `<div class="preview-list">${(details.section_drafts || [])
           .map(
             (draft) =>
@@ -2288,6 +2387,13 @@ els.addStyleFilesButton?.addEventListener("click", async () => {
 
 els.searchEnabledSelect?.addEventListener("change", saveProjectSettings);
 els.sectionSearchSelect?.addEventListener("change", saveProjectSettings);
+els.searchEngine1Select?.addEventListener("change", saveProjectSettings);
+els.searchEngine2Select?.addEventListener("change", saveProjectSettings);
+els.searchEngine3Select?.addEventListener("change", saveProjectSettings);
+els.searchHeadlessSelect?.addEventListener("change", saveProjectSettings);
+els.searchStealthSelect?.addEventListener("change", saveProjectSettings);
+els.searchLocaleSelect?.addEventListener("change", saveProjectSettings);
+els.searchQueryLanguageSelect?.addEventListener("change", saveProjectSettings);
 els.citationStyleSelect?.addEventListener("change", saveProjectSettings);
 els.targetLengthInput?.addEventListener("change", saveProjectSettings);
 els.docTypeSelect?.addEventListener("change", saveDocType);

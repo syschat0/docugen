@@ -47,7 +47,6 @@ from app.services.llm import (
     write_section_with_summary,
 )
 from app.services.search import (
-    build_section_query,
     research_chapters,
     search_section_sources,
     search_web,
@@ -59,6 +58,12 @@ from app.services.run_control import (
     get_stage_progress,
     is_cancel_requested,
     set_stage_progress,
+)
+from app.services.search_options import (
+    SearchOptions,
+    default_search_options,
+    reset_search_options,
+    use_search_options,
 )
 
 
@@ -145,6 +150,11 @@ PROJECT_SETTING_KEYS = (
     "section_search_enabled",
     "citation_style",
     "target_length",
+    "search_engines",
+    "search_headless",
+    "search_stealth",
+    "search_locale",
+    "search_query_language",
 )
 
 
@@ -220,6 +230,31 @@ def effective_citation_style(project_id: str) -> str:
     if value is None:
         value = settings.citation_style
     return value if value in CITATION_STYLES else "numeric"
+
+
+def effective_search_options(project_id: str) -> SearchOptions:
+    """Per-project search knobs (engine/headless/stealth/locale/query language).
+
+    Each is an explicit override when set, else the global env default. The
+    pipeline installs the result for the duration of a run so the browser and
+    LLM search helpers pick up the project's choices.
+    """
+    stored = get_project_settings(project_id)
+    defaults = default_search_options()
+
+    def pick(key: str, default: Any) -> Any:
+        value = stored.get(key)
+        return default if value is None else value
+
+    engines_override = stored.get("search_engines")
+    engines = tuple(engines_override) if engines_override else defaults.engines
+    return SearchOptions(
+        engines=engines,
+        headless=bool(pick("search_headless", defaults.headless)),
+        stealth=bool(pick("search_stealth", defaults.stealth)),
+        locale=pick("search_locale", defaults.locale),
+        query_language=pick("search_query_language", defaults.query_language),
+    )
 
 
 def _question_text(question_json: str) -> str:
@@ -2181,6 +2216,19 @@ def restore_draft_version(project_id: str, artifact_id: str) -> Optional[Artifac
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
+    """Install the project's effective search options for the whole run, then
+    delegate. The options reach the browser/LLM search helpers via a context
+    variable, so the reset must wrap every exit path."""
+    token = use_search_options(effective_search_options(project_id))
+    try:
+        return _run_document_generation(project_id, force_from)
+    finally:
+        reset_search_options(token)
+
+
+def _run_document_generation(
+    project_id: str, force_from: str | None = None
+) -> Optional[WorkflowRunRead]:
     project = get_project(project_id)
     if project is None:
         return None
@@ -3047,13 +3095,13 @@ def run_document_generation(
                     and len(topup_info) < settings.section_search_topup_limit
                     and best_overlap_score(section, section_sources) == 0
                 ):
-                    extra_sources, topup_error = search_section_sources(
+                    extra_sources, topup_error, topup_query = search_section_sources(
                         section, settings.chapter_search_results
                     )
                     topup_info.append(
                         {
                             "section_id": str(section.get("id", "")),
-                            "query": build_section_query(section),
+                            "query": topup_query,
                             "source_count": len(extra_sources),
                             "error": topup_error,
                         }
@@ -3644,6 +3692,8 @@ def _workflow_step_details(
         details.update(
             {
                 "query": content.get("query"),
+                "queries": content.get("queries"),
+                "query_source": content.get("query_source"),
                 "source_count": len(results),
                 "sources": [
                     {

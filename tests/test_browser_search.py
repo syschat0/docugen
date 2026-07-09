@@ -35,15 +35,110 @@ class TestEngineRegistry:
             assert config["result_selector"], name
             assert config["extract_js"], name
 
-    def test_engine_config_resolves_setting(self, monkeypatch):
-        monkeypatch.setattr(
-            browser_search, "settings", SimpleNamespace(search_engine="bing")
-        )
-        assert _engine_config() is _ENGINES["bing"]
+    def test_engine_config_resolves_setting(self):
+        assert _engine_config("bing") is _ENGINES["bing"]
+        assert _engine_config("google") is _ENGINES["google"]
 
-    def test_unknown_engine_raises(self, monkeypatch):
-        monkeypatch.setattr(
-            browser_search, "settings", SimpleNamespace(search_engine="google")
-        )
+    def test_unknown_engine_raises(self):
         with pytest.raises(BrowserSearchError, match="Unknown SEARCH_ENGINE"):
-            _engine_config()
+            _engine_config("yahoo")
+
+
+class TestEnginePriority:
+    def test_resolves_and_orders(self):
+        priority = browser_search._engine_priority(("google", "daum"))
+        assert [name for name, _config in priority] == ["google", "daum"]
+
+    def test_drops_unknown_and_duplicates(self):
+        priority = browser_search._engine_priority(("bing", "yahoo", "bing", "daum"))
+        assert [name for name, _config in priority] == ["bing", "daum"]
+
+    def test_raises_when_none_usable(self):
+        with pytest.raises(BrowserSearchError):
+            browser_search._engine_priority(("yahoo", "aol"))
+
+
+class TestDecodeGoogleUrl:
+    def test_unwraps_redirect(self):
+        href = "https://www.google.com/url?q=https://example.com/page&sa=U"
+        assert browser_search.decode_google_url(href) == "https://example.com/page"
+
+    def test_direct_url_unchanged(self):
+        assert (
+            browser_search.decode_google_url("https://example.com/p")
+            == "https://example.com/p"
+        )
+
+
+class TestSearchQueryFallback:
+    _PRIORITY = [("daum", _ENGINES["daum"]), ("bing", _ENGINES["bing"])]
+
+    def test_falls_back_on_challenge_and_blocks_engine(self, monkeypatch):
+        def fake_run(page, config, query, timeout_ms):
+            if config is _ENGINES["daum"]:
+                raise browser_search.SearchChallengeError("blocked")
+            return [{"title": "T", "url": "https://x", "snippet": "s"}]
+
+        monkeypatch.setattr(browser_search, "_run_search_query", fake_run)
+        blocked: set[str] = set()
+        name, config, items, error = browser_search._search_query_with_fallback(
+            None, self._PRIORITY, blocked, "q", 1000
+        )
+        assert name == "bing"
+        assert items[0]["url"] == "https://x"
+        assert error is None
+        assert "daum" in blocked
+
+    def test_all_engines_fail_returns_none(self, monkeypatch):
+        def fake_run(page, config, query, timeout_ms):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(browser_search, "_run_search_query", fake_run)
+        name, config, items, error = browser_search._search_query_with_fallback(
+            None, self._PRIORITY, set(), "q", 1000
+        )
+        assert name is None
+        assert items == []
+        assert error is not None
+
+    def test_blocked_engine_is_skipped(self, monkeypatch):
+        tried = []
+
+        def fake_run(page, config, query, timeout_ms):
+            tried.append(config)
+            return [{"title": "T", "url": "https://y", "snippet": ""}]
+
+        monkeypatch.setattr(browser_search, "_run_search_query", fake_run)
+        name, config, items, error = browser_search._search_query_with_fallback(
+            None, self._PRIORITY, {"daum"}, "q", 1000
+        )
+        assert name == "bing"
+        assert tried == [_ENGINES["bing"]]
+
+    def test_empty_result_is_not_a_fallback(self, monkeypatch):
+        tried = []
+
+        def fake_run(page, config, query, timeout_ms):
+            tried.append(config)
+            return []  # valid empty answer -> should NOT try the next engine
+
+        monkeypatch.setattr(browser_search, "_run_search_query", fake_run)
+        name, config, items, error = browser_search._search_query_with_fallback(
+            None, self._PRIORITY, set(), "q", 1000
+        )
+        assert name == "daum"
+        assert items == []
+        assert tried == [_ENGINES["daum"]]
+
+
+class TestApplyStealth:
+    def test_noop_when_disabled(self, monkeypatch):
+        monkeypatch.setattr(
+            browser_search,
+            "current_search_options",
+            lambda: SimpleNamespace(stealth=False),
+        )
+        touched = []
+        page = SimpleNamespace(add_init_script=lambda *a, **k: touched.append(a))
+        assert browser_search._apply_stealth(page) is None
+        assert touched == []
