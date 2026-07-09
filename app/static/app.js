@@ -1908,23 +1908,36 @@ function renderMermaidDiagrams() {
   });
 }
 
-function sectionDraftIds() {
-  const ids = new Set();
+function normalizeSectionHeadingText(value) {
+  return String(value || "")
+    .replace(/^\d+(?:\.\d+)*\s+/, "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// Maps each section's normalized title to its id. Headings render with a
+// numeric prefix ("1.2 Title") only for doc types with numbered_headings
+// enabled (see doc_types.py); others render the bare title. Matching on the
+// title instead of parsing a numeric prefix works for both.
+function sectionDraftIndex() {
+  const byTitle = new Map();
   for (const artifact of state.artifacts) {
     if (artifact.type !== "section_draft") continue;
-    const id = artifact.content?.section?.id;
-    if (id) ids.add(String(id));
+    const section = artifact.content?.section;
+    const id = section?.id;
+    const title = section?.title;
+    if (!id || !title) continue;
+    byTitle.set(normalizeSectionHeadingText(title), String(id));
   }
-  return ids;
+  return byTitle;
 }
 
 function attachSectionFeedbackButtons() {
-  const ids = sectionDraftIds();
-  if (ids.size === 0) return;
+  const byTitle = sectionDraftIndex();
+  if (byTitle.size === 0) return;
   for (const heading of els.draftPreview.querySelectorAll("h2, h3, h4, h5, h6")) {
-    const match = heading.textContent.trim().match(/^(\d+(?:\.\d+)*)\s/);
-    if (!match || !ids.has(match[1])) continue;
-    const sectionId = match[1];
+    const sectionId = byTitle.get(normalizeSectionHeadingText(heading.textContent));
+    if (!sectionId) continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "section-feedback-button";
