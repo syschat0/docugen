@@ -330,6 +330,13 @@ label {
   margin-bottom: 12px;
 }
 
+/* Breathing room between a panel's header row and its content. The pipeline
+ * summary row is excluded: it must stay flush when the panel is collapsed. */
+.draft-panel > .section-head,
+.tab-pane .section-head {
+  margin-bottom: 12px;
+}
+
 .sidebar-head span,
 .section-head span,
 .status-pill {
@@ -735,6 +742,21 @@ label {
   border-radius: 10px;
   background: var(--surface);
   padding: 8px;
+  cursor: pointer;
+}
+
+.progress-step:hover {
+  border-color: var(--blue);
+}
+
+.progress-step:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.progress-step.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue);
 }
 
 .progress-step strong,
@@ -822,6 +844,27 @@ label {
   :root[data-theme="simpsons"] .progress-step.running {
     animation: none;
   }
+}
+
+.step-detail {
+  margin-top: 10px;
+  border: var(--border-thin);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.step-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.step-detail-body {
+  max-height: 60vh;
+  overflow: auto;
+  margin-top: 8px;
 }
 
 .draft-viewer {

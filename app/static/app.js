@@ -20,6 +20,8 @@ const state = {
   versionsOpen: false,
   progress: null,
   appliedPhase: null,
+  selectedStepPhase: null,
+  lastStepDetailKey: null,
 };
 
 const translations = {
@@ -537,6 +539,7 @@ const els = {
   progressPercent: document.querySelector("#progressPercent"),
   progressFill: document.querySelector("#progressFill"),
   progressSteps: document.querySelector("#progressSteps"),
+  stepDetail: document.querySelector("#stepDetail"),
   draftStatus: document.querySelector("#draftStatus"),
   versionsButton: document.querySelector("#versionsButton"),
   versionList: document.querySelector("#versionList"),
@@ -851,6 +854,7 @@ function renderProjects() {
       `${statusLabel(project.status)} - ${phaseLabel(project.current_phase)} - ${formatDate(project.updated_at)}`;
     item.querySelector(".project-select").addEventListener("click", async () => {
       state.selectedProjectId = project.id;
+      state.selectedStepPhase = null;
       closeSidebarOnNarrow();
       renderProjects();
       await renderSelectedProject();
@@ -873,6 +877,7 @@ async function deleteProject(project) {
     await api(`/projects/${project.id}`, { method: "DELETE" });
     if (state.selectedProjectId === project.id) {
       state.selectedProjectId = null;
+      state.selectedStepPhase = null;
       state.questions = [];
       state.artifacts = [];
       state.progress = null;
@@ -1189,12 +1194,29 @@ function renderProgress() {
   for (const step of progress.steps) {
     const compact = document.createElement("div");
     compact.className = `progress-step ${step.status}`;
+    const isSelected = step.phase === state.selectedStepPhase;
+    compact.classList.toggle("selected", isSelected);
+    compact.setAttribute("role", "button");
+    compact.setAttribute("tabindex", "0");
+    compact.setAttribute("aria-pressed", String(isSelected));
     compact.innerHTML = `
       <strong></strong>
       <span></span>
     `;
     compact.querySelector("strong").textContent = phaseLabel(step.phase, step.label);
     compact.querySelector("span").textContent = `${statusLabel(step.status)} · ${stepDuration(step)}`;
+    const toggleStepDetail = () => {
+      state.selectedStepPhase =
+        state.selectedStepPhase === step.phase ? null : step.phase;
+      renderProgress();
+    };
+    compact.addEventListener("click", toggleStepDetail);
+    compact.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleStepDetail();
+      }
+    });
     if (step.progress && step.progress.total) {
       const { done, total } = step.progress;
       const fraction = total ? Math.round((done / total) * 100) : 0;
@@ -1237,6 +1259,65 @@ function renderProgress() {
 
   renderStatusStrip();
   applyLayoutPhase();
+  renderStepDetail();
+}
+
+function renderStepDetail() {
+  if (!els.stepDetail) return;
+  const step = state.progress?.steps?.find(
+    (candidate) => candidate.phase === state.selectedStepPhase,
+  );
+  if (!state.selectedStepPhase || !step) {
+    els.stepDetail.classList.add("hidden");
+    els.stepDetail.innerHTML = "";
+    state.lastStepDetailKey = null;
+    return;
+  }
+
+  // Skip the rebuild when nothing changed so polling (1.2s) does not reset the
+  // detail body's scroll position. Language is part of the key because the
+  // rendered labels are localized even though the raw step data is not.
+  const key = `${state.language}|${step.phase}|${JSON.stringify(step)}`;
+  if (state.lastStepDetailKey === key) return;
+
+  const previousBody = els.stepDetail.querySelector(".step-detail-body");
+  const previousScroll = previousBody ? previousBody.scrollTop : 0;
+  state.lastStepDetailKey = key;
+
+  els.stepDetail.classList.remove("hidden");
+  els.stepDetail.innerHTML = `
+    <div class="step-detail-head">
+      <p class="item-title"></p>
+      <div class="inline-controls">
+        <button type="button" class="secondary rerun-step"></button>
+        <button type="button" class="icon-button step-detail-close"></button>
+      </div>
+    </div>
+    <p class="item-meta"></p>
+    <div class="step-detail-body"></div>
+  `;
+  els.stepDetail.querySelector(".item-title").textContent = phaseLabel(step.phase, step.label);
+  els.stepDetail.querySelector(".item-meta").textContent =
+    `${statusLabel(step.status)} - ${t("started")} ${formatDate(step.created_at)} - ${t("completed")} ${formatDate(step.completed_at)} - ${t("duration")} ${stepDuration(step)}`;
+
+  const rerunButton = els.stepDetail.querySelector(".rerun-step");
+  rerunButton.textContent = t("rerunFromHere");
+  rerunButton.addEventListener("click", () => {
+    rerunFromStep(step.phase).catch((error) => showToast(error.message, true));
+  });
+
+  const closeButton = els.stepDetail.querySelector(".step-detail-close");
+  closeButton.textContent = "✕";
+  closeButton.setAttribute("aria-label", t("close"));
+  closeButton.addEventListener("click", () => {
+    state.selectedStepPhase = null;
+    renderProgress();
+  });
+
+  const body = els.stepDetail.querySelector(".step-detail-body");
+  // renderStepDetails already renders the error block for failed steps.
+  body.insertAdjacentHTML("beforeend", renderStepDetails(step));
+  body.scrollTop = previousScroll;
 }
 
 function resetProgressForRun(startPhase = "intake") {
@@ -2504,6 +2585,7 @@ els.projectForm.addEventListener("submit", async (event) => {
       }),
     });
     state.selectedProjectId = project.id;
+    state.selectedStepPhase = null;
     // Sync the URL now, or loadProjects() re-selects the previous project
     // from the stale ?project= param.
     syncProjectInUrl(project.id);
