@@ -935,6 +935,20 @@ label {
   overflow-x: auto;
 }
 
+.markdown-body .math-block {
+  display: block;
+  margin: 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
+.markdown-body .math-inline {
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}
+
 .section-feedback-panel {
   white-space: normal;
   display: grid;

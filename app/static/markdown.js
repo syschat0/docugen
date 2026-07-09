@@ -10,6 +10,7 @@
   function inlineMarkdown(value) {
     return escapeHtml(value)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\$([^\s$](?:[^$\n]*[^\s$])?)\$/g, '<span class="math-inline">$1</span>')
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
       .replace(
@@ -52,6 +53,8 @@
     let codeOpen = false;
     let codeLines = [];
     let codeLang = "";
+    let mathOpen = false;
+    let mathLines = [];
 
     function flushParagraph() {
       if (paragraph.length === 0) return;
@@ -89,6 +92,13 @@
       codeLines = [];
       codeOpen = false;
       codeLang = "";
+    }
+
+    function closeMath() {
+      if (!mathOpen) return;
+      html.push(`<div class="math-block">${escapeHtml(mathLines.join("\n"))}</div>`);
+      mathLines = [];
+      mathOpen = false;
     }
 
     function splitTableRow(row) {
@@ -139,12 +149,40 @@
         continue;
       }
 
+      if (mathOpen) {
+        if (line.trim() === "$$") {
+          closeMath();
+        } else {
+          mathLines.push(line);
+        }
+        continue;
+      }
+
+      if (line.trim() === "$$") {
+        flushParagraph();
+        closeList();
+        closeOrderedList();
+        flushBlockquote();
+        mathOpen = true;
+        continue;
+      }
+
       const trimmed = line.trim();
       if (!trimmed) {
         flushParagraph();
         closeList();
         closeOrderedList();
         flushBlockquote();
+        continue;
+      }
+
+      const blockMath = trimmed.match(/^\$\$(.+)\$\$$/);
+      if (blockMath) {
+        flushParagraph();
+        closeList();
+        closeOrderedList();
+        flushBlockquote();
+        html.push(`<div class="math-block">${escapeHtml(blockMath[1].trim())}</div>`);
         continue;
       }
 
@@ -223,6 +261,7 @@
     }
 
     closeCode();
+    closeMath();
     flushParagraph();
     closeList();
     closeOrderedList();

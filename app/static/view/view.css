@@ -239,6 +239,21 @@ body {
   page-break-inside: avoid;
 }
 
+.a4-body .math-block {
+  display: block;
+  margin: 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  page-break-inside: avoid;
+}
+
+.a4-body .math-inline {
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}
+
 .view-empty,
 .view-error,
 .noscript-article {

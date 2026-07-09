@@ -1765,6 +1765,7 @@ function renderDraftPreview() {
     els.draftViewer.classList.toggle("no-toc", rendered.toc.length === 0);
     attachSectionFeedbackButtons();
     renderMermaidDiagrams();
+    renderMathExpressions();
   } else {
     els.draftToc.classList.add("hidden");
     els.draftToc.innerHTML = "";
@@ -1906,6 +1907,25 @@ function renderMermaidDiagrams() {
       node.replaceWith(pre);
     }
   });
+}
+
+function renderMathExpressions() {
+  if (!window.katex) return;
+  for (const node of els.draftPreview.querySelectorAll(".math-inline")) {
+    renderMathNode(node, false);
+  }
+  for (const node of els.draftPreview.querySelectorAll(".math-block")) {
+    renderMathNode(node, true);
+  }
+}
+
+function renderMathNode(node, displayMode) {
+  const source = node.textContent || "";
+  try {
+    window.katex.render(source, node, { throwOnError: false, displayMode });
+  } catch {
+    node.textContent = source;
+  }
 }
 
 function normalizeSectionHeadingText(value) {

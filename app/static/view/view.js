@@ -262,6 +262,25 @@ async function renderMermaid() {
   }
 }
 
+function renderMath() {
+  if (!window.katex) return;
+  for (const node of els.docBody.querySelectorAll(".math-inline")) {
+    renderMathNode(node, false);
+  }
+  for (const node of els.docBody.querySelectorAll(".math-block")) {
+    renderMathNode(node, true);
+  }
+}
+
+function renderMathNode(node, displayMode) {
+  const source = node.textContent || "";
+  try {
+    window.katex.render(source, node, { throwOnError: false, displayMode });
+  } catch {
+    node.textContent = source;
+  }
+}
+
 function applyStaticCopy() {
   document.documentElement.lang = language;
   els.toolbarEyebrow.textContent = t("appTitle");
@@ -351,6 +370,7 @@ async function boot() {
     els.viewStage.classList.remove("hidden");
 
     await renderMermaid();
+    renderMath();
   } catch (error) {
     applySeo({
       title: t("documentView"),

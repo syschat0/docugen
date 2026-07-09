@@ -288,6 +288,16 @@ blocks with a bundled `mermaid.min.js` (no CDN needed); blocks that fail to
 parse fall back to a plain code block. Exported Markdown keeps the fences, so
 GitHub and most viewers render them natively.
 
+## Math Rendering
+
+The draft preview and the shareable document view render LaTeX math with a
+bundled `katex.min.js`/`katex.min.css` (no CDN needed). Use `$...$` for
+inline math (e.g. `$\sqrt{d_k}$`) and a `$$` fence on its own line, or a
+single line wrapped in `$$...$$`, for block math. To avoid misreading plain
+text like `$5 and $10` as math, inline math only matches when both dollar
+signs are hard against non-space characters. Expressions that fail to parse
+render as plain text instead of breaking the page.
+
 ## Planned Next Pieces
 
 - Export service
