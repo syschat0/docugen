@@ -2564,6 +2564,88 @@ def _build_final_draft_content(
     )
 
 
+@dataclass(frozen=True)
+class PreparedRunContext:
+    project: ProjectRead
+    profile: Dict[str, Any]
+    agent_name: str
+    classified_type: str | None
+    classify_usage: dict[str, Any] | None
+    decisions: list[UserDecisionRead]
+    feedback_decisions: list[UserDecisionRead]
+    input_cutoff: str
+
+
+def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
+    existing_pending = list_pending_questions(project_id, status="pending")
+    if not existing_pending:
+        return None
+    waiting_at = utc_now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE projects
+            SET status = ?, current_phase = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            ("waiting_for_user", existing_pending[0].phase, waiting_at, project_id),
+        )
+    updated_project = get_project(project_id)
+    if updated_project is None:
+        raise RuntimeError("Project disappeared while waiting for user")
+    return WorkflowRunRead(
+        project=updated_project,
+        artifacts=[],
+        pending_questions=existing_pending,
+        status="waiting_for_user",
+        message="Answer the pending questions, then start writing again.",
+    )
+
+
+def _prepare_generation_run(
+    project_id: str, project: ProjectRead
+) -> PreparedRunContext:
+    """Resolve profile and split user decisions before stage execution."""
+    agent_name = "llm_pipeline_writer" if settings.llm_enabled else "local_pipeline_writer"
+    classified_type: str | None = None
+    classify_usage: dict[str, Any] | None = None
+    if settings.llm_enabled and not project.document_type:
+        try:
+            classified_type, classify_usage = classify_document_type(project)
+        except LLMError:
+            classified_type, classify_usage = None, None
+        if classified_type:
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE projects SET document_type = ?, updated_at = ? WHERE id = ?",
+                    (classified_type, utc_now_iso(), project_id),
+                )
+            project = get_project(project_id) or project
+    profile = get_doc_type_profile(project.document_type)
+
+    # Process-control and per-section feedback decisions do not belong in the
+    # global document prompt or its input cutoff.
+    all_decisions = list_user_decisions(project_id)
+    decisions = [
+        decision
+        for decision in all_decisions
+        if decision.phase not in {"outline_approval", "section_feedback"}
+    ]
+    feedback_decisions = [
+        decision for decision in all_decisions if decision.phase == "section_feedback"
+    ]
+    return PreparedRunContext(
+        project=project,
+        profile=profile,
+        agent_name=agent_name,
+        classified_type=classified_type,
+        classify_usage=classify_usage,
+        decisions=decisions,
+        feedback_decisions=feedback_decisions,
+        input_cutoff=_decision_cutoff(project, decisions),
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -2597,65 +2679,19 @@ def _run_document_generation(
     else:
         _reset_agent_runs(project_id)
 
-    existing_pending = list_pending_questions(project_id, status="pending")
-    if existing_pending:
-        waiting_at = utc_now_iso()
-        with get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE projects
-                SET status = ?, current_phase = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                ("waiting_for_user", existing_pending[0].phase, waiting_at, project_id),
-            )
-        updated_project = get_project(project_id)
-        if updated_project is None:
-            raise RuntimeError("Project disappeared while waiting for user")
-        return WorkflowRunRead(
-            project=updated_project,
-            artifacts=[],
-            pending_questions=existing_pending,
-            status="waiting_for_user",
-            message="Answer the pending questions, then start writing again.",
-        )
+    waiting_result = _waiting_for_user_result(project_id)
+    if waiting_result is not None:
+        return waiting_result
 
-    agent_name = "llm_pipeline_writer" if settings.llm_enabled else "local_pipeline_writer"
-
-    # Resolve the document type before anything that consumes its profile
-    # (intake questions, research default, prompts). Classification is
-    # best-effort: on failure the run continues with the report profile and
-    # the type stays unset for the next attempt.
-    classified_type: str | None = None
-    classify_usage: dict[str, Any] | None = None
-    if settings.llm_enabled and not project.document_type:
-        try:
-            classified_type, classify_usage = classify_document_type(project)
-        except LLMError:
-            classified_type, classify_usage = None, None
-        if classified_type:
-            with get_connection() as conn:
-                conn.execute(
-                    "UPDATE projects SET document_type = ?, updated_at = ? WHERE id = ?",
-                    (classified_type, utc_now_iso(), project_id),
-                )
-            project = get_project(project_id) or project
-    profile = get_doc_type_profile(project.document_type)
-
-    # Outline-approval answers are process control, not document content:
-    # they must not feed prompts or invalidate cached artifacts. Section
-    # feedback is applied per-section in the feedback_revision stage, so it
-    # must not invalidate the whole pipeline either.
-    all_decisions = list_user_decisions(project_id)
-    decisions = [
-        decision
-        for decision in all_decisions
-        if decision.phase not in {"outline_approval", "section_feedback"}
-    ]
-    feedback_decisions = [
-        decision for decision in all_decisions if decision.phase == "section_feedback"
-    ]
-    input_cutoff = _decision_cutoff(project, decisions)
+    prepared = _prepare_generation_run(project_id, project)
+    project = prepared.project
+    profile = prepared.profile
+    agent_name = prepared.agent_name
+    classified_type = prepared.classified_type
+    classify_usage = prepared.classify_usage
+    decisions = prepared.decisions
+    feedback_decisions = prepared.feedback_decisions
+    input_cutoff = prepared.input_cutoff
     artifact_ids: list[str] = []
 
     def fail(run_id: str, phase: str, exc: Exception) -> None:
