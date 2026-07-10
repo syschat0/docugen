@@ -50,6 +50,9 @@
       `PipelineStageSpec` 레지스트리로 통합. `feedback_revision` 강제 실행도
       해당 단계 이후 실행 로그를 정확히 초기화
 - [ ] 3-1. `run_document_generation`(~1,200줄 단일 함수)을 스테이지 레지스트리 구조로 분해
+      - [x] 3-1a. `final_merge`의 인용 조립·이음새·품질 요약을
+        부작용 없는 `_build_final_draft_content`로 추출
+      - [ ] 3-1b. 인테이크/리서치/계획/작성/검토 실행 블록 순차 추출
 - [ ] 3-2. 유형 프로파일에 따라 리서치·인용 스테이지 조건부 실행
       (M1의 citation_style과 연결: 인용 자체의 on/off는 유형이 결정)
 

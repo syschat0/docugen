@@ -2470,6 +2470,100 @@ def restore_draft_version(project_id: str, artifact_id: str) -> Optional[Artifac
     return restored
 
 
+@dataclass(frozen=True)
+class FinalMergeInputs:
+    project_id: str
+    project: ProjectRead
+    profile: Dict[str, Any]
+    section_drafts: list[Dict[str, Any]]
+    chapter_sources: Dict[str, Any] | None
+    research: Dict[str, Any] | None
+    brief: Dict[str, Any]
+    section_plan: Dict[str, Any]
+    research_cutoff: str | None
+    continuity: Dict[str, Any]
+    rubric_review: Dict[str, Any]
+    revision: Dict[str, Any]
+    citation_style: str
+
+
+def _build_final_draft_content(
+    inputs: FinalMergeInputs,
+) -> tuple[Dict[str, Any], str, list[str], dict[str, Any] | None]:
+    """Assemble and assess a final draft without writing artifacts or runs."""
+    citations_enabled = bool(inputs.profile.get("citations_enabled", True))
+    renumbered_drafts, used_sources = render_citations(
+        [
+            {
+                "section": draft["section"],
+                "markdown": draft["markdown"],
+                "sources": (
+                    draft.get("sources")
+                    or _sources_for_section(
+                        draft.get("section") or {},
+                        inputs.chapter_sources,
+                        inputs.research,
+                        project_text=(
+                            f"{inputs.project.title} {inputs.project.initial_request}"
+                        ),
+                    )
+                )
+                if citations_enabled
+                else [],
+                "evidence": draft.get("evidence") or [],
+                "evidence_validation": draft.get("evidence_validation"),
+                "evidence_repair": draft.get("evidence_repair"),
+            }
+            for draft in inputs.section_drafts
+        ],
+        inputs.citation_style,
+    )
+    seam_ids: list[str] = []
+    usage = None
+    if settings.llm_enabled and settings.llm_merge_enabled:
+        renumbered_drafts, usage, seam_ids = smooth_chapter_seams(
+            inputs.project, inputs.brief, renumbered_drafts
+        )
+        merge_mode = "llm_seam"
+    else:
+        merge_mode = "local"
+    merge_inputs = [
+        {"section": draft["section"], "markdown": draft["markdown"]}
+        for draft in renumbered_drafts
+    ]
+    final_markdown = _local_merge(
+        inputs.project,
+        merge_inputs,
+        inputs.research,
+        inputs.section_plan,
+        used_sources,
+        inputs.citation_style,
+        accessed_at=inputs.research_cutoff,
+        profile=inputs.profile,
+    )
+    quality_summary = build_quality_summary(
+        project_text=f"{inputs.project.title}\n{inputs.project.initial_request}",
+        sources=used_sources,
+        section_drafts=renumbered_drafts,
+        continuity=inputs.continuity,
+        rubric=inputs.rubric_review,
+        citations_enabled=citations_enabled,
+        sentence_repair=inputs.revision.get("sentence_quality_repair"),
+        document_type=str(inputs.profile.get("key") or "report"),
+    )
+    return (
+        {
+            "format": "markdown",
+            "markdown": final_markdown,
+            "conditions": _draft_conditions(inputs.project_id),
+            "quality": quality_summary,
+        },
+        merge_mode,
+        seam_ids,
+        usage,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -3968,6 +4062,7 @@ def _run_document_generation(
             draft_artifact is not None
             and _is_fresh(draft_artifact.updated_at, revision_time)
             and draft_style == citation_style
+            and force_from != "final_merge"
         ):
             artifact_ids.append(draft_artifact.id)
             _complete_reuse_run(
@@ -3990,80 +4085,23 @@ def _run_document_generation(
                     ),
                 },
             )
-            # Each section cites [1]/[2] against its own small source list, so
-            # remap those local markers onto one global numbering (and real
-            # links) before merging. Drafts revived from revision artifacts may
-            # lack the stored source list; recompute it the same way section
-            # writing did. Types without citations get empty source lists,
-            # which makes render_citations strip any stray [n] markers.
-            citations_enabled = bool(profile.get("citations_enabled", True))
-            renumbered_drafts, used_sources = render_citations(
-                [
-                    {
-                        "section": draft["section"],
-                        "markdown": draft["markdown"],
-                        "sources": (
-                            draft.get("sources")
-                            or _sources_for_section(
-                                draft.get("section") or {},
-                                chapter_sources,
-                                research,
-                                project_text=f"{project.title} {project.initial_request}",
-                            )
-                        )
-                        if citations_enabled
-                        else [],
-                        "evidence": draft.get("evidence") or [],
-                        "evidence_validation": draft.get("evidence_validation"),
-                        "evidence_repair": draft.get("evidence_repair"),
-                    }
-                    for draft in section_drafts
-                ],
-                citation_style,
-            )
-            seam_ids: list[str] = []
-            usage = None
-            if settings.llm_enabled and settings.llm_merge_enabled:
-                # Seam smoothing: one small call per chapter boundary instead
-                # of the old whole-document merge call. The document itself is
-                # always assembled deterministically below, so headings,
-                # citations, and the Sources section can never be lost.
-                renumbered_drafts, usage, seam_ids = smooth_chapter_seams(
-                    project, brief, renumbered_drafts
+            final_content, merge_mode, seam_ids, usage = _build_final_draft_content(
+                FinalMergeInputs(
+                    project_id=project_id,
+                    project=project,
+                    profile=profile,
+                    section_drafts=section_drafts,
+                    chapter_sources=chapter_sources,
+                    research=research,
+                    brief=brief,
+                    section_plan=section_plan,
+                    research_cutoff=research_cutoff,
+                    continuity=continuity,
+                    rubric_review=rubric_review,
+                    revision=revision,
+                    citation_style=citation_style,
                 )
-                merge_mode = "llm_seam"
-            else:
-                merge_mode = "local"
-            merge_inputs = [
-                {"section": draft["section"], "markdown": draft["markdown"]}
-                for draft in renumbered_drafts
-            ]
-            final_markdown = _local_merge(
-                project,
-                merge_inputs,
-                research,
-                section_plan,
-                used_sources,
-                citation_style,
-                accessed_at=research_cutoff,
-                profile=profile,
             )
-            quality_summary = build_quality_summary(
-                project_text=f"{project.title}\n{project.initial_request}",
-                sources=used_sources,
-                section_drafts=renumbered_drafts,
-                continuity=continuity,
-                rubric=rubric_review,
-                citations_enabled=citations_enabled,
-                sentence_repair=revision.get("sentence_quality_repair"),
-                document_type=str(profile.get("key") or "report"),
-            )
-            final_content = {
-                "format": "markdown",
-                "markdown": final_markdown,
-                "conditions": _draft_conditions(project_id),
-                "quality": quality_summary,
-            }
             with get_connection() as conn:
                 artifact_ids.append(
                     _insert_artifact(
