@@ -2782,6 +2782,79 @@ def _run_intake_stage(
     return None
 
 
+def _run_style_card_stage(
+    project_id: str,
+    project: ProjectRead,
+    agent_name: str,
+    input_cutoff: str,
+) -> tuple[Dict[str, Any] | None, list[str]]:
+    """Build or reuse the optional writing-style guide."""
+    style_samples = [
+        ref
+        for ref in list_project_references(project_id)
+        if ref.kind == "style"
+        and ref.status == "ready"
+        and (ref.content_text or "").strip()
+    ]
+    style_card: Dict[str, Any] | None = None
+    artifact_ids: list[str] = []
+    style_card_artifact = _latest_artifact(project_id, "style_card")
+    if not style_samples:
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "style_card",
+            {"skipped": True, "reason": "no style samples"},
+        )
+    elif style_card_artifact is not None and _is_fresh(
+        style_card_artifact.updated_at, input_cutoff
+    ):
+        style_card = style_card_artifact.content or {}
+        artifact_ids.append(style_card_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "style_card",
+            {"artifact_id": style_card_artifact.id},
+        )
+    elif not settings.llm_enabled:
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "style_card",
+            {"skipped": True, "reason": "llm disabled"},
+        )
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "style_card",
+            {"sample_count": len(style_samples)},
+        )
+        try:
+            style_card, usage = derive_style_card(project, style_samples)
+        except LLMError as exc:
+            _complete_agent_run(run_id, {"error": str(exc)}, status="completed")
+            style_card = None
+        else:
+            with get_connection() as conn:
+                artifact_id = _insert_artifact(
+                    conn,
+                    project_id,
+                    "style_card",
+                    "Style card",
+                    style_card,
+                    utc_now_iso(),
+                    agent_name,
+                )
+            artifact_ids.append(artifact_id)
+            _complete_agent_run(
+                run_id, {"artifact_id": artifact_id}, token_usage=usage
+            )
+
+    return style_card, artifact_ids
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -2840,68 +2913,13 @@ def _run_document_generation(
         # Style card: distill the user's writing samples into a voice guide.
         # Best effort - a failed derivation records the error and the run
         # continues without a card.
-        style_samples = [
-            ref
-            for ref in list_project_references(project_id)
-            if ref.kind == "style"
-            and ref.status == "ready"
-            and (ref.content_text or "").strip()
-        ]
-        style_card: Dict[str, Any] | None = None
-        style_card_artifact = _latest_artifact(project_id, "style_card")
-        if not style_samples:
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "style_card",
-                {"skipped": True, "reason": "no style samples"},
-            )
-        elif style_card_artifact is not None and _is_fresh(
-            style_card_artifact.updated_at, input_cutoff
-        ):
-            style_card = style_card_artifact.content or {}
-            artifact_ids.append(style_card_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "style_card",
-                {"artifact_id": style_card_artifact.id},
-            )
-        elif not settings.llm_enabled:
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "style_card",
-                {"skipped": True, "reason": "llm disabled"},
-            )
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "style_card",
-                {"sample_count": len(style_samples)},
-            )
-            try:
-                style_card, usage = derive_style_card(project, style_samples)
-            except LLMError as exc:
-                _complete_agent_run(run_id, {"error": str(exc)}, status="completed")
-                style_card = None
-            else:
-                with get_connection() as conn:
-                    artifact_ids.append(
-                        _insert_artifact(
-                            conn,
-                            project_id,
-                            "style_card",
-                            "Style card",
-                            style_card,
-                            utc_now_iso(),
-                            agent_name,
-                        )
-                    )
-                _complete_agent_run(
-                    run_id, {"artifact_id": artifact_ids[-1]}, token_usage=usage
-                )
+        style_card, style_card_artifact_ids = _run_style_card_stage(
+            project_id,
+            project,
+            agent_name,
+            input_cutoff,
+        )
+        artifact_ids.extend(style_card_artifact_ids)
 
         research_artifact = _latest_artifact(project_id, "research_sources")
         if research_artifact is not None and _is_fresh(
