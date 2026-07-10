@@ -292,7 +292,10 @@ An actionable quality item can also be converted directly into section
 feedback. The UI opens the matching section's existing feedback panel and
 prefills a comment with the issue label, affected section ids, and excerpt.
 Nothing is saved until the user presses the panel's save button, so navigating
-or previewing the suggested request has no pipeline side effect.
+or previewing the suggested request has no pipeline side effect. The adjacent
+"Save & improve section" action stores the same feedback and starts the
+pipeline at `feedback_revision`, reusing unaffected section drafts while
+regenerating downstream review and final-draft artifacts.
 
 ## Offline Quality Benchmark
 

@@ -233,6 +233,8 @@ const translations = {
     issueDecisionCleared: "Quality issue decision removed.",
     requestIssueFix: "Request fix",
     qualityFeedbackTemplate: "Resolve this quality issue in section {sections}: {issue}\nProblem excerpt: {excerpt}",
+    saveAndImproveSection: "Save & improve section",
+    sectionImprovementStarted: "Feedback saved. Improving section {id} now.",
     structureIssue_long_sentence: "Long sentence ({sections}): {excerpt}",
     structureIssue_long_paragraph: "Dense paragraph ({sections}): {excerpt}",
     structureIssue_list_heavy: "List-heavy section ({sections}): {excerpt}",
@@ -362,6 +364,8 @@ const translations = {
     issueDecisionCleared: "품질 이슈 처리를 해제했습니다.",
     requestIssueFix: "수정 요청",
     qualityFeedbackTemplate: "섹션 {sections}의 품질 이슈를 수정하세요: {issue}\n문제 문장: {excerpt}",
+    saveAndImproveSection: "저장 후 섹션 개선",
+    sectionImprovementStarted: "피드백을 저장했습니다. 섹션 {id} 개선을 시작합니다.",
     structureIssue_long_sentence: "긴 문장 ({sections}): {excerpt}",
     structureIssue_long_paragraph: "조밀한 문단 ({sections}): {excerpt}",
     structureIssue_list_heavy: "목록 편중 ({sections}): {excerpt}",
@@ -2573,6 +2577,7 @@ async function toggleSectionFeedbackPanel(sectionId, heading, initialComment = "
     <textarea rows="3" placeholder="${escapeHtml(t("feedbackPlaceholder"))}"></textarea>
     <div class="answer-batch-actions">
       <button type="button" class="feedback-save">${escapeHtml(t("saveComment"))}</button>
+      <button type="button" class="feedback-save-run">${escapeHtml(t("saveAndImproveSection"))}</button>
       <button type="button" class="secondary feedback-close">${escapeHtml(t("close"))}</button>
     </div>
   `;
@@ -2594,21 +2599,49 @@ async function toggleSectionFeedbackPanel(sectionId, heading, initialComment = "
 
   const textarea = panel.querySelector("textarea");
   textarea.value = initialComment;
-  panel.querySelector(".feedback-save").addEventListener("click", async () => {
+  const saveButtons = [
+    panel.querySelector(".feedback-save"),
+    panel.querySelector(".feedback-save-run"),
+  ];
+  const saveFeedback = async (startImprovement = false) => {
     const comment = textarea.value.trim();
     if (!comment) return;
+    for (const button of saveButtons) button.disabled = true;
     try {
       await api(feedbackUrl, {
         method: "POST",
         body: JSON.stringify({ comment }),
       });
       textarea.value = "";
-      showToast(t("feedbackSaved", { id: sectionId }));
-      await loadHistory();
+      if (startImprovement) {
+        setRunButtonRunning(true);
+        resetProgressForRun("feedback_revision");
+        const result = await api(`/projects/${project.id}/run`, {
+          method: "POST",
+          body: JSON.stringify({ force_from: "feedback_revision" }),
+        });
+        panel.remove();
+        showToast(
+          result.message || t("sectionImprovementStarted", { id: sectionId }),
+        );
+        startRunPolling();
+      } else {
+        showToast(t("feedbackSaved", { id: sectionId }));
+        await loadHistory();
+      }
     } catch (error) {
+      if (startImprovement) {
+        stopRunPolling();
+        setRunButtonRunning(false);
+        await loadProgress().catch(() => {});
+      }
       showToast(error.message, true);
+    } finally {
+      for (const button of saveButtons) button.disabled = false;
     }
-  });
+  };
+  panel.querySelector(".feedback-save").addEventListener("click", () => saveFeedback(false));
+  panel.querySelector(".feedback-save-run").addEventListener("click", () => saveFeedback(true));
   panel.querySelector(".feedback-close").addEventListener("click", () => panel.remove());
   textarea.focus();
   return panel;
