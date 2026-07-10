@@ -63,6 +63,38 @@ class TestInvalidateFromIntake:
         assert repositories._latest_artifact(project.id, "brief") is None
 
 
+class TestPipelineStageRegistry:
+    def test_registry_keys_are_unique_and_drive_workflow_order(self):
+        keys = [stage.key for stage in repositories.PIPELINE_STAGES]
+        assert len(keys) == len(set(keys))
+        assert repositories.WORKFLOW_STEPS == [
+            (stage.key, stage.label) for stage in repositories.PIPELINE_STAGES
+        ]
+        assert keys.index("feedback_revision") < keys.index("continuity_review")
+
+    def test_feedback_rerun_keeps_drafts_but_clears_downstream_runs(self, temp_db):
+        project = _project()
+        draft = repositories.create_artifact(
+            project.id,
+            ArtifactCreate(type="section_draft", title="Section", content={}),
+        )
+        for phase in ("intake", "feedback_revision", "continuity_review", "final_merge"):
+            repositories._start_agent_run(project.id, "test", phase, {})
+
+        repositories._invalidate_from_phase(project.id, "feedback_revision")
+
+        assert repositories.get_artifact(project.id, draft.id) is not None
+        with session.get_connection() as conn:
+            phases = [
+                row["phase"]
+                for row in conn.execute(
+                    "SELECT phase FROM agent_runs WHERE project_id = ? ORDER BY created_at",
+                    (project.id,),
+                ).fetchall()
+            ]
+        assert phases == ["intake"]
+
+
 class TestForcedIntakeRerun:
     def test_replans_questions_despite_existing_answers(self, temp_db, monkeypatch):
         project = _project()

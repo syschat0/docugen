@@ -1,5 +1,6 @@
 import json
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -95,25 +96,81 @@ class WorkflowCancelledError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class PipelineStageSpec:
+    key: str
+    label: str
+    invalidates: tuple[str, ...] = ()
+    clears_summaries: bool = False
+
+
+PIPELINE_STAGES: tuple[PipelineStageSpec, ...] = (
+    PipelineStageSpec(
+        "intake",
+        "Intake questions",
+        ("research_sources", "source_summaries", "brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+        True,
+    ),
+    PipelineStageSpec(
+        "style_card", "Style card", ("style_card", "section_draft", "draft")
+    ),
+    PipelineStageSpec(
+        "research",
+        "Web research",
+        ("research_sources", "source_summaries", "brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+    ),
+    PipelineStageSpec(
+        "source_summary",
+        "Source summaries",
+        ("source_summaries", "brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+    ),
+    PipelineStageSpec(
+        "brief",
+        "Brief",
+        ("brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+    ),
+    PipelineStageSpec(
+        "outline",
+        "Outline",
+        ("outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+    ),
+    PipelineStageSpec(
+        "outline_review",
+        "Outline review",
+        ("outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+    ),
+    PipelineStageSpec(
+        "section_plan",
+        "Section plan",
+        ("section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
+        True,
+    ),
+    PipelineStageSpec(
+        "section_plan_review",
+        "Section plan review",
+        ("section_plan_review", "chapter_sources", "section_draft", "draft"),
+        True,
+    ),
+    PipelineStageSpec(
+        "chapter_research",
+        "Chapter research",
+        ("chapter_sources", "section_draft", "draft"),
+    ),
+    PipelineStageSpec(
+        "section_writing", "Section writing", ("section_draft", "draft"), True
+    ),
+    PipelineStageSpec("section_summary", "Section summaries", ("draft",), True),
+    PipelineStageSpec("feedback_revision", "Feedback revision"),
+    PipelineStageSpec("continuity_review", "Continuity review", ("draft",), True),
+    PipelineStageSpec("rubric_review", "Rubric review", ("rubric_review", "targeted_revision", "draft")),
+    PipelineStageSpec("targeted_revision", "Targeted revision", ("draft",), True),
+    PipelineStageSpec("final_merge", "Final merge", ("draft",), True),
+)
+
 WORKFLOW_STEPS: list[tuple[str, str]] = [
-    ("intake", "Intake questions"),
-    ("style_card", "Style card"),
-    ("research", "Web research"),
-    ("source_summary", "Source summaries"),
-    ("brief", "Brief"),
-    ("outline", "Outline"),
-    ("outline_review", "Outline review"),
-    ("section_plan", "Section plan"),
-    ("section_plan_review", "Section plan review"),
-    ("chapter_research", "Chapter research"),
-    ("section_writing", "Section writing"),
-    ("section_summary", "Section summaries"),
-    ("feedback_revision", "Feedback revision"),
-    ("continuity_review", "Continuity review"),
-    ("rubric_review", "Rubric review"),
-    ("targeted_revision", "Targeted revision"),
-    ("final_merge", "Final merge"),
+    (stage.key, stage.label) for stage in PIPELINE_STAGES
 ]
+_PIPELINE_STAGE_BY_KEY = {stage.key: stage for stage in PIPELINE_STAGES}
 
 
 def utc_now_iso() -> str:
@@ -1326,134 +1383,34 @@ def _latest_artifacts(project_id: str, artifact_type: str) -> List[ArtifactRead]
 
 
 def _invalidate_from_phase(project_id: str, phase: str) -> None:
-    artifact_types_by_phase = {
-        # A regenerated style card changes how sections sound, not what the
-        # document covers, so it invalidates drafts but keeps the plan.
-        "style_card": [
-            "style_card",
-            "section_draft",
-            "draft",
-        ],
-        "rubric_review": [
-            "rubric_review",
-            "targeted_revision",
-            "draft",
-        ],
-        # Rerunning from intake means "collect questions again": everything
-        # downstream regenerates; unanswered pending questions are dropped
-        # below while answered ones (and their decisions) survive so the
-        # planner does not re-ask them.
-        "intake": [
-            "research_sources",
-            "source_summaries",
-            "brief",
-            "outline",
-            "outline_review",
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "research": [
-            "research_sources",
-            "source_summaries",
-            "brief",
-            "outline",
-            "outline_review",
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "source_summary": [
-            "source_summaries",
-            "brief",
-            "outline",
-            "outline_review",
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "brief": [
-            "brief",
-            "outline",
-            "outline_review",
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "outline": [
-            "outline",
-            "outline_review",
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "outline_review": [
-            "outline_review",
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "section_plan": [
-            "section_plan",
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "section_plan_review": [
-            "section_plan_review",
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "chapter_research": [
-            "chapter_sources",
-            "section_draft",
-            "draft",
-        ],
-        "section_writing": ["section_draft", "draft"],
-        "section_summary": ["draft"],
-        "continuity_review": ["draft"],
-        "targeted_revision": ["draft"],
-        "final_merge": ["draft"],
-    }
-    artifact_types = artifact_types_by_phase.get(phase)
-    if artifact_types is None:
+    stage = _PIPELINE_STAGE_BY_KEY.get(phase)
+    if stage is None:
         return
 
     # Preserve every prior final draft as version history: a forced rerun only
     # clears intermediate artifacts and then writes a new draft version, so the
     # old one stays browsable in the version list.
-    artifact_types = [artifact_type for artifact_type in artifact_types if artifact_type != "draft"]
+    artifact_types = [
+        artifact_type for artifact_type in stage.invalidates if artifact_type != "draft"
+    ]
 
     run_phases = [item[0] for item in WORKFLOW_STEPS]
     if phase in run_phases:
         run_phases = run_phases[run_phases.index(phase) :]
 
     with get_connection() as conn:
-        placeholders = ",".join("?" for _ in artifact_types)
-        conn.execute(
-            f"DELETE FROM artifacts WHERE project_id = ? AND type IN ({placeholders})",
-            (project_id, *artifact_types),
-        )
+        if artifact_types:
+            placeholders = ",".join("?" for _ in artifact_types)
+            conn.execute(
+                f"DELETE FROM artifacts WHERE project_id = ? AND type IN ({placeholders})",
+                (project_id, *artifact_types),
+            )
         if phase == "intake":
             conn.execute(
                 "DELETE FROM pending_questions WHERE project_id = ? AND status = ?",
                 (project_id, "pending"),
             )
-        if phase in {"intake", "section_writing", "section_summary", "continuity_review", "targeted_revision", "final_merge", "section_plan", "section_plan_review"}:
+        if stage.clears_summaries:
             conn.execute("DELETE FROM summaries WHERE project_id = ?", (project_id,))
         run_placeholders = ",".join("?" for _ in run_phases)
         conn.execute(
