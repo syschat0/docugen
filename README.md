@@ -294,6 +294,30 @@ prefills a comment with the issue label, affected section ids, and excerpt.
 Nothing is saved until the user presses the panel's save button, so navigating
 or previewing the suggested request has no pipeline side effect.
 
+## Offline Quality Benchmark
+
+Run the deterministic regression set without calling an LLM or search engine:
+
+```bat
+scripts\benchmark-quality.bat
+```
+
+The fixture at `benchmarks/quality_cases.json` covers all six document types
+and compares a known regression against an improved candidate. A case can
+require metrics to decrease or increase, cap the candidate's total flags, and
+forbid specific warnings. The command exits non-zero when a check regresses.
+
+To evaluate actual SLM output, place `<case-id>.json` files in a directory and
+pass it as the candidate source. Each file accepts `sources` plus either the
+fixture's compact `sections` form or pipeline-shaped `section_drafts`:
+
+```bat
+scripts\benchmark-quality.bat --candidate-dir data\benchmark-candidates --output data\quality-report.json
+```
+
+The JSON report contains baseline/candidate metrics, deltas, warnings, and each
+failed expectation, making it suitable for CI or model/prompt comparisons.
+
 ## Style Samples
 
 Upload your own writing (.txt/.md) in the "Style samples" panel and the

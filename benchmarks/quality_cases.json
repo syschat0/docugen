@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "description": "Offline deterministic quality regressions for DocuGen's six document types.",
+  "cases": [
+    {
+      "id": "report_source_and_repetition",
+      "document_type": "report",
+      "project_text": "patient health treatment report",
+      "citations_enabled": false,
+      "description": "A health report should replace a blog source and repeated prose with authoritative, distinct evidence.",
+      "baseline": {
+        "sources": [
+          {"title": "Personal health blog", "url": "https://medium.com/example-health"}
+        ],
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Background",
+            "body": "Clinical decisions require evidence that distinguishes general education from advice for an individual patient."
+          },
+          {
+            "id": "2.1",
+            "title": "Current findings",
+            "body": "Clinical decisions require evidence that distinguishes general education from advice for an individual patient."
+          }
+        ]
+      },
+      "candidate": {
+        "sources": [
+          {"title": "World Health Organization guidance", "url": "https://www.who.int/health-topics"}
+        ],
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Background",
+            "body": "Clinical decisions require evidence that distinguishes general education from advice for an individual patient."
+          },
+          {
+            "id": "2.1",
+            "title": "Current findings",
+            "body": "The findings summarize population-level guidance and identify questions that still require professional assessment."
+          }
+        ]
+      },
+      "expectations": {
+        "decrease": ["total_flags", "writing_issues", "low_quality_sources"],
+        "increase": ["strong_sources"],
+        "candidate_max_total_flags": 0,
+        "candidate_forbidden_warnings": [
+          "duplicate_content",
+          "low_quality_sources",
+          "high_stakes_without_strong_sources"
+        ]
+      }
+    },
+    {
+      "id": "academic_bookends",
+      "document_type": "academic_paper",
+      "project_text": "renewable energy adoption research paper",
+      "citations_enabled": false,
+      "description": "A substantial academic paper needs identifiable introductory and concluding sections.",
+      "shared_variant": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Topic framing",
+            "body": "Renewable energy adoption depends on technical capacity, public policy, financing conditions, and local acceptance. Earlier studies often examine these factors separately, which makes their interaction difficult to compare. This paper defines adoption as sustained integration into the regional electricity mix rather than a single installation decision. The analysis therefore follows a common set of institutional, economic, and operational questions across every section."
+          },
+          {
+            "id": "2.1",
+            "title": "Research method",
+            "body": "The method combines comparative case descriptions with a structured review of reported implementation barriers. Cases are selected to represent different grid conditions, regulatory models, and levels of industrial demand. Each observation is coded under infrastructure readiness, investment stability, administrative coordination, and community participation. The approach supports careful comparison while avoiding causal claims that the available descriptive material cannot establish."
+          },
+          {
+            "id": "3.1",
+            "title": "Findings",
+            "body": "The comparison shows that grid planning and predictable approval processes shape the pace of deployment in every case. Stable financing is most useful when connection schedules and procurement rules are already transparent. Community participation affects project continuity because unresolved local costs can delay otherwise mature investments. These patterns suggest that adoption is a coordinated institutional process rather than a narrow contest between generation technologies."
+          },
+          {
+            "id": "4.1",
+            "title": "Closing reflections",
+            "body": "The results support a phased strategy that aligns grid upgrades, permitting capacity, investment signals, and local consultation. The study remains limited by differences in reporting periods and by the descriptive nature of several source materials. Future research should test the proposed relationships with comparable longitudinal indicators and explicit measures of implementation delay. The central implication is that durable adoption requires coordination mechanisms that remain stable after individual projects are announced."
+          }
+        ]
+      },
+      "baseline": {
+        "title_overrides": {
+          "1.1": "Topic framing",
+          "4.1": "Closing reflections"
+        }
+      },
+      "candidate": {
+        "title_overrides": {
+          "1.1": "Introduction and scope",
+          "4.1": "Conclusion and implications"
+        }
+      },
+      "expectations": {
+        "decrease": ["total_flags", "structure_issues"],
+        "candidate_max_total_flags": 0,
+        "candidate_forbidden_warnings": ["missing_introduction", "missing_conclusion"]
+      }
+    },
+    {
+      "id": "blog_scannability",
+      "document_type": "blog_post",
+      "project_text": "practical remote work blog post",
+      "citations_enabled": false,
+      "description": "A blog should split a dense multi-idea paragraph into short, scannable paragraphs.",
+      "baseline": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Why the day feels fragmented",
+            "body": "Remote work often fails when every message is treated as an immediate task. A visible daily priority gives the team a shared reference point. Short focus blocks protect difficult work from a constant stream of notifications. A written handoff reduces the need for another status meeting. Clear shutdown rituals also help people stop carrying unfinished decisions into the evening."
+          }
+        ]
+      },
+      "candidate": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Why the day feels fragmented",
+            "body": "Remote work often fails when every message is treated as an immediate task.\n\nA visible daily priority gives the team a shared reference point.\n\nShort focus blocks protect difficult work from a constant stream of notifications.\n\nA written handoff reduces the need for another status meeting.\n\nClear shutdown rituals also help people stop carrying unfinished decisions into the evening."
+          }
+        ]
+      },
+      "expectations": {
+        "decrease": ["total_flags", "structure_issues"],
+        "candidate_max_total_flags": 0,
+        "candidate_forbidden_warnings": ["long_paragraphs"]
+      }
+    },
+    {
+      "id": "essay_list_to_prose",
+      "document_type": "essay",
+      "project_text": "personal essay about moving to a new city",
+      "citations_enabled": false,
+      "description": "An essay should carry its movement through prose rather than a checklist.",
+      "baseline": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "The first evening",
+            "body": "- The station smelled like rain and warm metal.\n- My suitcase wheel caught in every pavement crack.\n- The apartment key felt too small for the heavy door.\n- A neighbor laughed somewhere above the stairwell.\n- I ate dinner beside an unopened cardboard box.\n- The unfamiliar traffic continued long after midnight."
+          }
+        ]
+      },
+      "candidate": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "The first evening",
+            "body": "The station smelled like rain and warm metal, and my suitcase wheel caught in every pavement crack on the walk to the apartment. The key felt too small for the heavy door while a neighbor laughed somewhere above the stairwell.\n\nI ate dinner beside an unopened cardboard box. Long after midnight, the unfamiliar traffic kept reminding me that the city had not yet learned my name."
+          }
+        ]
+      },
+      "expectations": {
+        "decrease": ["total_flags", "structure_issues"],
+        "candidate_max_total_flags": 0,
+        "candidate_forbidden_warnings": ["list_heavy_sections"]
+      }
+    },
+    {
+      "id": "tech_doc_heading_contract",
+      "document_type": "tech_doc",
+      "project_text": "service deployment runbook",
+      "citations_enabled": false,
+      "description": "A leaf technical section must keep one heading and express internal labels without extra headings.",
+      "baseline": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Verify the deployment",
+            "body": "Check that the new task is healthy before moving traffic.\n\n#### Expected result\n\nEvery required instance reports the selected release identifier."
+          }
+        ]
+      },
+      "candidate": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "Verify the deployment",
+            "body": "Check that the new task is healthy before moving traffic.\n\n**Expected result.** Every required instance reports the selected release identifier."
+          }
+        ]
+      },
+      "expectations": {
+        "decrease": ["total_flags", "structure_issues"],
+        "candidate_max_total_flags": 0,
+        "candidate_forbidden_warnings": ["heading_structure"]
+      }
+    },
+    {
+      "id": "presentation_spoken_pacing",
+      "document_type": "presentation_script",
+      "project_text": "short presentation about responsible AI adoption",
+      "citations_enabled": false,
+      "description": "A presentation script should replace one written-style sentence with short spoken beats.",
+      "baseline": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "What changes on Monday",
+            "body": "Responsible adoption begins when leaders define a narrow decision, name the people affected by that decision, measure the cost of a wrong answer, document who can stop the system, and review the result before expanding automation to another team."
+          }
+        ]
+      },
+      "candidate": {
+        "sections": [
+          {
+            "id": "1.1",
+            "title": "What changes on Monday",
+            "body": "Start with one narrow decision. Name the people affected by it, and measure the cost of a wrong answer. Decide who can stop the system. Review the result before another team adopts it."
+          }
+        ]
+      },
+      "expectations": {
+        "decrease": ["total_flags", "structure_issues"],
+        "candidate_max_total_flags": 0,
+        "candidate_forbidden_warnings": ["long_sentences"]
+      }
+    }
+  ]
+}
