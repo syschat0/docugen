@@ -95,6 +95,46 @@
   --heading-weight: 700;
 }
 
+:root[data-theme="newspaper"] {
+  color-scheme: light;
+  --page-bg:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.04'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    #ecebe8;
+  --surface: #fbfaf8;
+  --surface-muted: #f0efec;
+  --sidebar-bg: rgba(251, 250, 248, 0.85);
+  --border: #b6b4ae;
+  --outline: 3px double var(--border);
+  --border-thin: 1px solid var(--border);
+  --text: #33322f;
+  --muted: #8a8880;
+  --accent: #55534e;
+  --accent-strong: #3e3c38;
+  --accent-text: #fbfaf8;
+  --blue: #6b8aa3;
+  --blue-soft: #e3eaef;
+  --pink: #a29e97;
+  --pink-soft: #eae8e4;
+  --danger: #a05c55;
+  --danger-soft: #f0e3e1;
+  --ok: #7d8f76;
+  --ok-soft: #e7ebe3;
+  --warning: #b08d55;
+  --shadow: 0 4px 12px rgba(60, 58, 54, 0.1);
+  --shadow-small: 0 2px 6px rgba(60, 58, 54, 0.08);
+  --press-shift: 1px;
+  --topbar-bg: #fbfaf8;
+  --topbar-text: #33322f;
+  --title-shadow: none;
+  --display-color: var(--text);
+  --display-shadow: none;
+  --progress-fill: linear-gradient(90deg, #8f8d86, #b6b4ae);
+  --input-bg: #fdfcfa;
+  --heading-font: "Noto Serif KR", "Gowun Batang", Georgia, serif;
+  --body-font: "Noto Serif KR", "Gowun Batang", Georgia, "Malgun Gothic", serif;
+  --heading-weight: 700;
+}
+
 /*
  * Button sizing scale (theme-independent). Every button is one of three sizes:
  *   - default  : standalone actions (Start Writing, Save, Export, topbar…)
@@ -1778,4 +1818,16 @@ label {
   .strip-progress {
     width: 100%;
   }
+}
+
+/* Newspaper: print is flat and square, and the ink-black --accent behind a
+ * running step would hide the default --text/--muted step labels. */
+:root[data-theme="newspaper"] * {
+  border-radius: 0;
+}
+
+:root[data-theme="newspaper"] .progress-step.running strong,
+:root[data-theme="newspaper"] .progress-step.running span,
+:root[data-theme="newspaper"] .progress-step.running .step-subcount {
+  color: var(--accent-text);
 }

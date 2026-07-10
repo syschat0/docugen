@@ -208,6 +208,7 @@ const translations = {
     theme: "Theme",
     themePastel: "Pastel Watercolor",
     themeSimpsons: "Simpsons",
+    themeNewspaper: "New York Times",
     title: "Title",
     tone: "Tone",
     topic: "Topic",
@@ -410,6 +411,7 @@ const translations = {
     theme: "테마",
     themePastel: "파스텔 수채화",
     themeSimpsons: "심슨 만화",
+    themeNewspaper: "뉴욕타임즈",
     title: "제목",
     tone: "톤",
     topic: "주제",
@@ -2321,7 +2323,8 @@ els.languageSelect?.addEventListener("change", () => {
 });
 
 els.themeSelect?.addEventListener("change", () => {
-  state.theme = els.themeSelect.value === "pastel" ? "pastel" : "simpsons";
+  const value = els.themeSelect.value;
+  state.theme = ["pastel", "simpsons", "newspaper"].includes(value) ? value : "pastel";
   localStorage.setItem("docugenTheme", state.theme);
   applyTheme();
 });
