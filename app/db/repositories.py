@@ -2576,6 +2576,15 @@ class PreparedRunContext:
     input_cutoff: str
 
 
+@dataclass(frozen=True)
+class ResearchStageResult:
+    research: Dict[str, Any]
+    source_summaries: Dict[str, Any]
+    research_cutoff: str
+    source_summary_time: str
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -2855,6 +2864,128 @@ def _run_style_card_stage(
     return style_card, artifact_ids
 
 
+def _run_research_stage(
+    project_id: str,
+    project: ProjectRead,
+    decisions: list[UserDecisionRead],
+    agent_name: str,
+    input_cutoff: str,
+) -> ResearchStageResult:
+    """Build or reuse web research and its normalized source summaries."""
+    artifact_ids: list[str] = []
+    research_artifact = _latest_artifact(project_id, "research_sources")
+    if research_artifact is not None and _is_fresh(
+        research_artifact.updated_at, input_cutoff
+    ):
+        research = research_artifact.content or {}
+        artifact_ids.append(research_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "research",
+            {
+                "artifact_id": research_artifact.id,
+                "source_count": len(research.get("results", [])),
+            },
+        )
+        research_cutoff = research_artifact.updated_at
+    else:
+        run_id = _start_agent_run(project_id, agent_name, "research", {})
+        try:
+            research = search_web(project, decisions)
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "research", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "research_sources",
+                "Web research sources",
+                research,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        research_artifact = get_artifact(project_id, artifact_id)
+        research_cutoff = (
+            research_artifact.updated_at if research_artifact else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {
+                "artifact_id": artifact_id,
+                "source_count": len(research.get("results", [])),
+                "error": research.get("error"),
+            },
+        )
+
+    source_summary_artifact = _latest_artifact(project_id, "source_summaries")
+    if source_summary_artifact is not None and _is_fresh(
+        source_summary_artifact.updated_at, research_cutoff
+    ):
+        source_summaries = source_summary_artifact.content or {}
+        artifact_ids.append(source_summary_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "source_summary",
+            {
+                "artifact_id": source_summary_artifact.id,
+                "source_count": len(source_summaries.get("sources", [])),
+            },
+        )
+        source_summary_time = source_summary_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "source_summary",
+            {"source_count": len(research.get("results", []))},
+        )
+        try:
+            source_summaries = summarize_search_sources(research)
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "source_summary", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "source_summaries",
+                "Source summaries",
+                source_summaries,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        source_summary_artifact = get_artifact(project_id, artifact_id)
+        source_summary_time = (
+            source_summary_artifact.updated_at
+            if source_summary_artifact
+            else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {
+                "artifact_id": artifact_id,
+                "source_count": len(source_summaries.get("sources", [])),
+            },
+        )
+
+    _merge_reference_sources(
+        list_project_references(project_id), research, source_summaries
+    )
+    research["source_summaries"] = source_summaries
+    return ResearchStageResult(
+        research=research,
+        source_summaries=source_summaries,
+        research_cutoff=research_cutoff,
+        source_summary_time=source_summary_time,
+        artifact_ids=artifact_ids,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -2921,101 +3052,18 @@ def _run_document_generation(
         )
         artifact_ids.extend(style_card_artifact_ids)
 
-        research_artifact = _latest_artifact(project_id, "research_sources")
-        if research_artifact is not None and _is_fresh(
-            research_artifact.updated_at, input_cutoff
-        ):
-            research = research_artifact.content or {}
-            artifact_ids.append(research_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "research",
-                {
-                    "artifact_id": research_artifact.id,
-                    "source_count": len(research.get("results", [])),
-                },
-            )
-            research_cutoff = research_artifact.updated_at
-        else:
-            run_id = _start_agent_run(project_id, agent_name, "research", {})
-            research = search_web(project, decisions)
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "research_sources",
-                        "Web research sources",
-                        research,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            research_artifact = get_artifact(project_id, artifact_ids[-1])
-            research_cutoff = research_artifact.updated_at if research_artifact else utc_now_iso()
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "source_count": len(research.get("results", [])),
-                    "error": research.get("error"),
-                },
-            )
-
-        source_summary_artifact = _latest_artifact(project_id, "source_summaries")
-        if source_summary_artifact is not None and _is_fresh(
-            source_summary_artifact.updated_at, research_cutoff
-        ):
-            source_summaries = source_summary_artifact.content or {}
-            artifact_ids.append(source_summary_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "source_summary",
-                {
-                    "artifact_id": source_summary_artifact.id,
-                    "source_count": len(source_summaries.get("sources", [])),
-                },
-            )
-            source_summary_time = source_summary_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "source_summary",
-                {"source_count": len(research.get("results", []))},
-            )
-            source_summaries = summarize_search_sources(research)
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "source_summaries",
-                        "Source summaries",
-                        source_summaries,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            source_summary_artifact = get_artifact(project_id, artifact_ids[-1])
-            source_summary_time = (
-                source_summary_artifact.updated_at
-                if source_summary_artifact
-                else utc_now_iso()
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "source_count": len(source_summaries.get("sources", [])),
-                },
-            )
-        _merge_reference_sources(
-            list_project_references(project_id), research, source_summaries
+        research_result = _run_research_stage(
+            project_id,
+            project,
+            decisions,
+            agent_name,
+            input_cutoff,
         )
-        research["source_summaries"] = source_summaries
+        research = research_result.research
+        source_summaries = research_result.source_summaries
+        research_cutoff = research_result.research_cutoff
+        source_summary_time = research_result.source_summary_time
+        artifact_ids.extend(research_result.artifact_ids)
 
         brief_artifact = _latest_artifact(project_id, "brief")
         brief_cutoff = max(input_cutoff, research_cutoff, source_summary_time)
