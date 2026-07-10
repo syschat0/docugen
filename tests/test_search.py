@@ -218,6 +218,59 @@ class TestSearchWeb:
         assert result["results"] == []
         assert result["error"] is not None
 
+    def test_high_stakes_search_adds_authority_results(self, monkeypatch):
+        from app.db import repositories
+
+        monkeypatch.setattr(search, "settings", fake_settings())
+        monkeypatch.setattr(repositories, "effective_search_enabled", lambda project_id: True)
+        calls = []
+
+        def fake_http(queries):
+            calls.append(queries)
+            if queries[0].startswith("site:"):
+                return ([{"title": "NIH", "url": "https://nih.gov/health", "snippet": "medical treatment"}], [])
+            return ([{"title": "Blog", "url": "https://medium.com/health", "snippet": "medical treatment"}], [])
+
+        monkeypatch.setattr(search, "_search_http", fake_http)
+        result = search_web(
+            make_project(title="Medical treatment guide", request="Guide for patients"),
+            [],
+        )
+        assert len(calls) == 2
+        assert result["results"][0]["url"] == "https://nih.gov/health"
+        assert result["quality_topup"] == {
+            "attempted": True,
+            "queries": [
+                "site:nih.gov Medical treatment guide Guide for patients",
+                "site:who.int Medical treatment guide Guide for patients",
+            ],
+            "results_added": 1,
+            "strong_source_count": 1,
+            "error": None,
+        }
+
+
+class TestSectionSourceSearch:
+    def test_high_stakes_section_replaces_weak_result_with_authority(self, monkeypatch):
+        monkeypatch.setattr(search, "settings", fake_settings())
+
+        def fake_once(query):
+            if query.startswith("site:nih.gov"):
+                return ([{"title": "NIH treatment", "url": "https://nih.gov/treatment", "snippet": "patient treatment evidence"}], None)
+            return ([{"title": "Blog", "url": "https://medium.com/treatment", "snippet": "patient treatment advice"}], None)
+
+        monkeypatch.setattr(search, "_search_once", fake_once)
+        sources, error, query = search.search_section_sources(
+            {"title": "Treatment options", "key_points": ["patient evidence"]},
+            2,
+            project_text="Medical guide",
+        )
+        assert error is None
+        assert query == "Treatment options patient evidence"
+        assert sources[0]["url"] == "https://nih.gov/treatment"
+        assert sources[0]["quality_topup"] is True
+        assert sources[0]["trust_tier"] == "authoritative"
+
 
 class TestPlanChapterQueries:
     CHAPTERS = [

@@ -210,8 +210,89 @@ call per chapter over clipped section text, aggregates 1-5 scores per
 criterion into a `rubric_review` artifact, and merges its findings with
 the continuity review's (deduplicated, capped at five sections) so one
 targeted-revision pass fixes both. Rubric grading is best-effort: failed
-chapters are noted and skipped, and a fully failed review passes instead
-of blocking the run.
+chapters are noted and skipped, and a fully failed review is recorded as
+`incomplete` instead of silently passing or blocking the writing run.
+
+## Deterministic Quality Summary
+
+The draft screen complements model-based reviews with deterministic quality
+signals: strong and low-quality source counts, the percentage of eligible body
+paragraphs containing citations, and the number of review findings. Government,
+standards, and primary-research hosts rank above academic/institutional hosts,
+general web pages, and wiki/blog/community sources. High-stakes topics without
+a strong source are flagged explicitly.
+
+Search also applies that signal before writing. If medical, legal, or financial
+research returns no government or academic source, DocuGen runs a bounded
+authority-domain query and ranks those results ahead of weaker pages when they
+are relevant. Section-level research repeats the safeguard when a specific
+section still lacks strong evidence. Source trust labels are included in the
+writer context so a small model can treat blogs and unverified web pages as
+background rather than as primary support for high-stakes claims.
+
+Reviewer output is normalized before revision: issues cannot coexist with a
+`pass` verdict, and section ids mentioned in issues become revision targets
+even when a small model leaves `revision_targets` empty. New runs finish with
+project status `review_needed` whenever deterministic warnings remain; the
+pipeline itself can still reach 100% because generation completed normally.
+
+Section research is reduced to a few passages ranked against the current
+section before it reaches the writer. Alongside Markdown, the writer returns an
+evidence ledger containing the supported claim, local source number, passage
+id, and an exact excerpt. The application verifies that the excerpt really
+appeared in the passage shown to the model and reports the percentage of cited
+sources backed by valid ledger entries. A later section rewrite marks its old
+ledger as stale instead of presenting outdated evidence as current.
+
+When a freshly written section has an invalid ledger or an unverified citation,
+the pipeline makes at most one evidence-repair call for that section. The repair
+may only use the supplied passages; an unsupported factual claim must be removed
+rather than kept without its citation. The repaired Markdown and ledger are
+validated again deterministically. Remaining failures stay visible in the
+quality summary, so the bounded repair loop cannot silently declare success.
+
+The same summary performs a bounded sentence-level pass without another model
+call. It flags near-duplicate prose, highly similar statements whose polarity
+is reversed, and uncited absolute claims in medical, legal, or financial
+documents. These signals are deliberately presented as review flags rather
+than semantic proof; the API includes section ids and short excerpts so the UI
+can show where a person should inspect the draft.
+
+When `SENTENCE_QUALITY_REPAIR_ENABLED=true`, the targeted-revision stage makes
+at most `SENTENCE_QUALITY_REPAIR_LIMIT` small repair calls (three by default),
+one per flagged section. A candidate is kept only when the document-wide issue
+count decreases, its first heading and citation markers are unchanged, and its
+evidence ledger validates against the supplied passages. Failed or ineffective
+repairs are discarded, while remaining flags continue to produce
+`review_needed`.
+
+A document-type-aware structure pass also checks sentence and paragraph
+density, sections dominated by lists, and missing or extra Markdown headings.
+For reports and academic papers with at least four sections and substantial
+body text, it additionally checks whether the opening titles identify context
+or purpose and whether the closing titles identify a conclusion, summary, or
+recommendation. Blog, script, essay, and technical-document thresholds remain
+separate so their intended formats are not judged by report conventions.
+
+Sentence, structure, and reviewer targets in the quality panel are actionable:
+selecting one switches from an older version or raw Markdown to the latest
+rendered draft, scrolls to the matching section, and briefly highlights the
+specific sentence or paragraph when its excerpt can be located. Numeric section
+headings provide a fallback when cached section artifacts are unavailable.
+
+Deterministic sentence and structure flags can be marked as reviewed or given
+a documented exception. A reviewed flag stays active; an exception is removed
+from the active count only when its reason is saved. The decision is keyed to
+the current draft artifact and a stable issue fingerprint, so restoring or
+generating another draft never inherits an old exception. If every occurrence
+behind one warning is excepted, that warning no longer blocks `ready`; undoing
+the decision restores the warning and project status.
+
+An actionable quality item can also be converted directly into section
+feedback. The UI opens the matching section's existing feedback panel and
+prefills a comment with the issue label, affected section ids, and excerpt.
+Nothing is saved until the user presses the panel's save button, so navigating
+or previewing the suggested request has no pipeline side effect.
 
 ## Style Samples
 

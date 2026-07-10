@@ -1,9 +1,17 @@
+import json
+from types import SimpleNamespace
+
+from app.services import llm
 from app.services.llm import (
     _clip,
     _clip_summary,
+    repair_section_evidence,
+    repair_sentence_quality_sections,
     select_relevant_sources,
     select_section_sources,
+    write_section_with_summary,
 )
+from app.services.quality import sentence_quality_stats
 
 
 class TestClip:
@@ -141,3 +149,204 @@ class TestSelectSectionSources:
             limit=2,
         )
         assert [source["url"] for source in picked] == ["https://g2.com"]
+
+    def test_source_trust_breaks_relevance_ties(self):
+        equally_relevant = [
+            {
+                "title": "Docker network guide",
+                "url": "https://blog.naver.com/docker",
+                "summary": "docker network bridge",
+            },
+            {
+                "title": "Docker network standard",
+                "url": "https://example.gov/docker",
+                "summary": "docker network bridge",
+            },
+        ]
+        picked = select_section_sources(self.SECTION, [], equally_relevant, limit=2)
+        assert picked[0]["url"] == "https://example.gov/docker"
+
+    def test_high_stakes_section_prioritizes_relevant_authority_over_chapter_blog(self):
+        section = {"title": "Patient treatment", "key_points": ["clinical evidence"]}
+        chapter_blog = {
+            "title": "Patient treatment evidence",
+            "url": "https://medium.com/treatment",
+            "summary": "patient treatment clinical evidence",
+        }
+        global_authority = {
+            "title": "Patient treatment evidence",
+            "url": "https://nih.gov/treatment",
+            "summary": "patient treatment clinical evidence",
+        }
+        picked = select_section_sources(
+            section, [chapter_blog], [global_authority], limit=2
+        )
+        assert picked[0]["url"] == "https://nih.gov/treatment"
+
+
+def test_section_writer_requests_and_returns_evidence_ledger(monkeypatch):
+    captured = {}
+
+    def fake_chat(messages):
+        captured["prompt"] = messages[-1]["content"]
+        return (
+            json.dumps(
+                {
+                    "markdown": "### 1.1 Docker network\n\nBridge mode connects containers [1].",
+                    "summary": {
+                        "section_id": "1.1",
+                        "summary": "Bridge mode overview",
+                        "claims": ["Bridge mode connects containers"],
+                        "terms": ["bridge mode"],
+                        "open_threads": [],
+                        "next_section_handoff": "Continue to routing.",
+                    },
+                    "evidence": [
+                        {
+                            "claim": "Bridge mode connects containers",
+                            "source_id": 1,
+                            "passage_id": "P1",
+                            "evidence": "Docker network bridge mode connects containers on one host.",
+                        }
+                    ],
+                }
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(llm, "_chat_content", fake_chat)
+    markdown, summary, _ = write_section_with_summary(
+        SimpleNamespace(title="Docker guide"),
+        {"topic": "Docker", "style": "formal"},
+        {"id": "1.1", "title": "Docker network", "key_points": ["bridge mode"]},
+        None,
+        [
+            {
+                "title": "Docker standard",
+                "url": "https://example.gov/docker",
+                "summary": "Docker network bridge mode connects containers on one host.",
+            }
+        ],
+        [],
+    )
+    assert "[1.P1] Docker network bridge mode" in captured["prompt"]
+    assert "[1][trust=authoritative]" in captured["prompt"]
+    assert summary["evidence"][0]["source_id"] == 1
+    assert "[1]" in markdown
+
+
+def test_evidence_repair_returns_replacement_ledger(monkeypatch):
+    captured = {}
+
+    def fake_chat(messages):
+        captured["prompt"] = messages[-1]["content"]
+        return (
+            json.dumps(
+                {
+                    "markdown": "### 1.1 Docker\n\nBridge mode connects containers [1].",
+                    "evidence": [
+                        {
+                            "claim": "Bridge mode connects containers",
+                            "source_id": 1,
+                            "passage_id": "P1",
+                            "evidence": "Docker bridge mode connects containers on one host.",
+                        }
+                    ],
+                }
+            ),
+            {"total_tokens": 100},
+        )
+
+    monkeypatch.setattr(llm, "_chat_content", fake_chat)
+    markdown, evidence, usage = repair_section_evidence(
+        SimpleNamespace(title="Docker guide"),
+        {"style": "formal"},
+        {"id": "1.1", "title": "Docker"},
+        "### 1.1 Docker\n\nUnsupported cloud claim [1].",
+        [
+            {
+                "title": "Docker standard",
+                "url": "https://example.gov/docker",
+                "summary": "Docker bridge mode connects containers on one host.",
+            }
+        ],
+        {"unverified_citation_ids": [1]},
+    )
+    assert "Do not merely" in captured["prompt"]
+    assert evidence[0]["passage_id"] == "P1"
+    assert "Bridge mode" in markdown
+    assert usage == {"total_tokens": 100}
+
+
+def test_sentence_quality_repair_accepts_only_document_level_improvement(monkeypatch):
+    repeated = (
+        "The deployment controller checks the desired state and updates every running "
+        "instance until the configured version is active."
+    )
+    drafts = [
+        {"section": {"id": "1.1", "title": "Overview"}, "markdown": f"### 1.1 Overview\n\n{repeated}", "sources": []},
+        {"section": {"id": "2.1", "title": "Operations"}, "markdown": f"### 2.1 Operations\n\n{repeated}", "sources": []},
+    ]
+
+    def fake_chat(_messages):
+        return (
+            json.dumps(
+                {
+                    "markdown": (
+                        "### 2.1 Operations\n\nThe operations section explains rollback "
+                        "monitoring and alert thresholds for failed deployments."
+                    ),
+                    "evidence": [],
+                }
+            ),
+            {"total_tokens": 50},
+        )
+
+    monkeypatch.setattr(llm, "_chat_content", fake_chat)
+    repaired, report, usage = repair_sentence_quality_sections(
+        SimpleNamespace(title="Deployment guide"),
+        {"style": "formal"},
+        drafts,
+        sentence_quality_stats(drafts),
+        limit=1,
+    )
+    assert repaired[1]["markdown"].startswith("### 2.1 Operations")
+    assert report["initial_issue_count"] == 1
+    assert report["final_issue_count"] == 0
+    assert report["repaired_section_count"] == 1
+    assert usage == {"section_calls": [{"section_id": "2.1", "total_tokens": 50}]}
+
+
+def test_sentence_quality_repair_rejects_dropped_citation(monkeypatch):
+    repeated = (
+        "The treatment protocol reduces symptoms for selected adult patients under "
+        "specialist monitoring [1]."
+    )
+    drafts = [
+        {"section": {"id": "1.1"}, "markdown": f"### 1.1 A\n\n{repeated}", "sources": []},
+        {"section": {"id": "2.1"}, "markdown": f"### 2.1 B\n\n{repeated}", "sources": []},
+    ]
+    monkeypatch.setattr(
+        llm,
+        "_chat_content",
+        lambda _messages: (
+            json.dumps(
+                {
+                    "markdown": "### 2.1 B\n\nThis section now discusses monitoring only.",
+                    "evidence": [],
+                }
+            ),
+            None,
+        ),
+    )
+    repaired, report, _usage = repair_sentence_quality_sections(
+        SimpleNamespace(title="Medical guide"),
+        {"style": "formal"},
+        drafts,
+        sentence_quality_stats(drafts, high_stakes=True),
+        high_stakes=True,
+        limit=1,
+    )
+    assert repaired == drafts
+    assert report["repaired_section_count"] == 0
+    assert "citation markers" in report["results"][0]["reason"]

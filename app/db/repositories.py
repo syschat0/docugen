@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,14 @@ from app.services.citations import (
     render_citations,
 )
 from app.services.doc_types import get_doc_type_profile
+from app.services.quality import (
+    build_quality_summary,
+    grade_source,
+    is_high_stakes_topic,
+    issue_section_ids,
+    sentence_quality_stats,
+    validate_evidence_ledger,
+)
 from app.services.llm import (
     LLMError,
     apply_section_revisions,
@@ -35,6 +44,8 @@ from app.services.llm import (
     generate_section_plan,
     best_overlap_score,
     plan_user_questions,
+    repair_section_evidence,
+    repair_sentence_quality_sections,
     review_continuity_staged,
     review_outline,
     review_rubric_staged,
@@ -72,6 +83,10 @@ class QuestionAlreadyAnsweredError(Exception):
 
 
 class WorkflowRunFailedError(Exception):
+    pass
+
+
+class UnknownQualityIssueError(Exception):
     pass
 
 
@@ -385,6 +400,7 @@ def delete_project(project_id: str) -> bool:
         for table in (
             "project_references",
             "project_settings",
+            "quality_issue_decisions",
             "workflow_threads",
             "pending_questions",
             "user_decisions",
@@ -1517,6 +1533,9 @@ def _reusable_section_drafts(
                 "section": content.get("section") or section,
                 "markdown": markdown,
                 "sources": content.get("sources") or [],
+                "evidence": content.get("evidence") or [],
+                "evidence_validation": content.get("evidence_validation"),
+                "evidence_repair": content.get("evidence_repair"),
                 "artifact_id": draft.id,
                 "updated_at": draft.updated_at,
             }
@@ -1909,6 +1928,7 @@ def _local_section_summary(section: Dict[str, Any], markdown: str) -> Dict[str, 
         "terms": [],
         "open_threads": [],
         "next_section_handoff": f"Continue after {section.get('title', 'this section')}.",
+        "evidence": [],
     }
 
 
@@ -2073,6 +2093,7 @@ def _sources_for_section(
     section: Dict[str, Any],
     chapter_sources: Dict[str, Any] | None,
     research: Dict[str, Any] | None,
+    project_text: str = "",
 ) -> list[Dict[str, Any]]:
     chapter_id = str(section.get("id", "")).split(".")[0]
     chapter_candidates: list[Dict[str, Any]] = []
@@ -2087,7 +2108,13 @@ def _sources_for_section(
             for result in (research or {}).get("results") or []
             if isinstance(result, dict)
         ]
-    return select_section_sources(section, chapter_candidates, global_candidates, limit=2)
+    return select_section_sources(
+        section,
+        chapter_candidates,
+        global_candidates,
+        limit=2,
+        project_text=project_text,
+    )
 
 
 def _reexpand_section_plan(
@@ -2155,12 +2182,281 @@ def _combine_reviews(
             for target in (source.get("revision_targets") or [])
             if str(target).strip()
         )
-    )[:5]
+    )
+    # Reviewers occasionally describe exact affected sections but forget the
+    # revision_targets field. Recover them so a contradictory "pass" cannot
+    # silently discard actionable findings.
+    targets = list(dict.fromkeys(targets + issue_section_ids(issues)))[:5]
     return {
-        "verdict": "needs_revision" if targets else "pass",
+        "verdict": "needs_revision" if targets or issues else "pass",
         "issues": issues,
         "revision_targets": targets,
     }
+
+
+def _quality_issue_key(issue: Dict[str, Any]) -> str:
+    identity = {
+        "type": str(issue.get("type") or ""),
+        "section_ids": [str(value) for value in (issue.get("section_ids") or [])],
+        "excerpts": [" ".join(str(value).lower().split()) for value in (issue.get("excerpts") or [])],
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return digest[:24]
+
+
+def _quality_decisions(project_id: str, draft_id: str) -> dict[str, Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT issue_key, decision, reason, created_at, updated_at
+            FROM quality_issue_decisions
+            WHERE project_id = ? AND draft_id = ?
+            """,
+            (project_id, draft_id),
+        ).fetchall()
+    return {str(row["issue_key"]): dict(row) for row in rows}
+
+
+_QUALITY_WARNING_BY_ISSUE_TYPE = {
+    "duplicate": "duplicate_content",
+    "possible_contradiction": "possible_contradictions",
+    "unsupported_overclaim": "unsupported_overclaims",
+    "long_sentence": "long_sentences",
+    "long_paragraph": "long_paragraphs",
+    "list_heavy": "list_heavy_sections",
+    "heading_structure": "heading_structure",
+    "missing_introduction": "missing_introduction",
+    "missing_conclusion": "missing_conclusion",
+}
+
+
+def _quality_type_totals(summary: Dict[str, Any]) -> dict[str, int]:
+    writing = summary.get("writing_quality") or {}
+    structure = summary.get("structure_quality") or {}
+    return {
+        "duplicate": int(writing.get("duplicate_pair_count") or 0),
+        "possible_contradiction": int(writing.get("possible_contradiction_count") or 0),
+        "unsupported_overclaim": int(writing.get("unsupported_overclaim_count") or 0),
+        "long_sentence": int(structure.get("long_sentence_count") or 0),
+        "long_paragraph": int(structure.get("long_paragraph_count") or 0),
+        "list_heavy": int(structure.get("list_heavy_section_count") or 0),
+        "heading_structure": int(structure.get("heading_issue_count") or 0),
+        "missing_introduction": int(bool(structure.get("missing_introduction"))),
+        "missing_conclusion": int(bool(structure.get("missing_conclusion"))),
+    }
+
+
+def _apply_quality_decisions(
+    project_id: str, draft_id: str, raw_summary: Dict[str, Any]
+) -> Dict[str, Any]:
+    summary = json.loads(json.dumps(raw_summary, ensure_ascii=False))
+    summary["draft_id"] = draft_id
+    decisions = _quality_decisions(project_id, draft_id)
+    waived_by_type: dict[str, int] = {}
+    acknowledged_count = 0
+    waived_count = 0
+
+    for group_name in ("writing_quality", "structure_quality"):
+        group = summary.setdefault(group_name, {})
+        group_waived = 0
+        group_acknowledged = 0
+        for issue in group.get("issues") or []:
+            if not isinstance(issue, dict):
+                continue
+            issue_key = _quality_issue_key(issue)
+            issue["issue_key"] = issue_key
+            decision = decisions.get(issue_key)
+            if not decision:
+                continue
+            issue["decision"] = decision
+            if decision["decision"] == "waived":
+                group_waived += 1
+                waived_count += 1
+                issue_type = str(issue.get("type") or "")
+                waived_by_type[issue_type] = waived_by_type.get(issue_type, 0) + 1
+            else:
+                group_acknowledged += 1
+                acknowledged_count += 1
+        group["waived_issue_count"] = group_waived
+        group["acknowledged_issue_count"] = group_acknowledged
+        group["active_issue_count"] = max(
+            int(group.get("issue_count") or 0) - group_waived, 0
+        )
+
+    review = summary.setdefault("review", {})
+    review["target_issues"] = [
+        {
+            "type": "review_target",
+            "section_ids": [str(section_id)],
+            "excerpts": [],
+            "issue_key": _quality_issue_key(
+                {
+                    "type": "review_target",
+                    "section_ids": [str(section_id)],
+                    "excerpts": [],
+                }
+            ),
+        }
+        for section_id in (review.get("revision_targets") or [])
+    ]
+
+    totals = _quality_type_totals(summary)
+    removable_warnings = {
+        warning
+        for issue_type, warning in _QUALITY_WARNING_BY_ISSUE_TYPE.items()
+        if totals.get(issue_type, 0) > 0
+        and waived_by_type.get(issue_type, 0) >= totals[issue_type]
+    }
+    summary["warnings"] = [
+        warning
+        for warning in (summary.get("warnings") or [])
+        if warning not in removable_warnings
+    ]
+    summary["status"] = "review_needed" if summary["warnings"] else "ready"
+    summary["decision_summary"] = {
+        "acknowledged_count": acknowledged_count,
+        "waived_count": waived_count,
+    }
+    return summary
+
+
+def _quality_actionable_keys(summary: Dict[str, Any]) -> set[str]:
+    return {
+        str(issue.get("issue_key"))
+        for group_name in ("writing_quality", "structure_quality")
+        for issue in ((summary.get(group_name) or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("issue_key")
+    }
+
+
+def _sync_project_quality_status(project_id: str, summary: Dict[str, Any]) -> None:
+    project = get_project(project_id)
+    if (
+        project is not None
+        and project.current_phase == "final_merge"
+        and project.status in {"completed", "review_needed"}
+    ):
+        set_project_status(
+            project_id,
+            "review_needed" if summary.get("status") == "review_needed" else "completed",
+            "final_merge",
+        )
+
+
+def set_quality_issue_decision(
+    project_id: str, issue_key: str, decision: str, reason: str
+) -> Optional[Dict[str, Any]]:
+    project = get_project(project_id)
+    if project is None:
+        return None
+    if project.current_phase != "final_merge":
+        raise UnknownQualityIssueError(
+            "Quality decisions can only be saved for the current final draft"
+        )
+    summary = get_project_quality_summary(project_id)
+    if summary is None:
+        return None
+    if issue_key not in _quality_actionable_keys(summary):
+        raise UnknownQualityIssueError("Quality issue does not belong to the latest draft")
+    draft_id = str(summary.get("draft_id") or "")
+    if not draft_id:
+        raise UnknownQualityIssueError("No current draft is available")
+    now = utc_now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO quality_issue_decisions (
+                id, project_id, draft_id, issue_key, decision, reason, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, draft_id, issue_key) DO UPDATE SET
+                decision = excluded.decision,
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (str(uuid4()), project_id, draft_id, issue_key, decision, reason, now, now),
+        )
+    updated = get_project_quality_summary(project_id)
+    if updated is not None:
+        _sync_project_quality_status(project_id, updated)
+    return updated
+
+
+def delete_quality_issue_decision(
+    project_id: str, issue_key: str
+) -> Optional[Dict[str, Any]]:
+    summary = get_project_quality_summary(project_id)
+    if summary is None:
+        return None
+    draft_id = str(summary.get("draft_id") or "")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM quality_issue_decisions
+            WHERE project_id = ? AND draft_id = ? AND issue_key = ?
+            """,
+            (project_id, draft_id, issue_key),
+        )
+    updated = get_project_quality_summary(project_id)
+    if updated is not None:
+        _sync_project_quality_status(project_id, updated)
+    return updated
+
+
+def get_project_quality_summary(project_id: str) -> Optional[Dict[str, Any]]:
+    """Build the latest deterministic quality summary for API and status use."""
+    project = get_project(project_id)
+    if project is None:
+        return None
+
+    draft_artifact = _latest_artifact(project_id, "draft")
+    stored_quality = (draft_artifact.content or {}).get("quality") if draft_artifact else None
+    if (
+        project.current_phase == "final_merge"
+        and project.status in {"completed", "review_needed"}
+        and isinstance(stored_quality, dict)
+        and stored_quality.get("status")
+    ):
+        return _apply_quality_decisions(project_id, draft_artifact.id, stored_quality)
+
+    latest_by_section: dict[str, Dict[str, Any]] = {}
+    for artifact in _latest_artifacts(project_id, "section_draft"):
+        content = artifact.content or {}
+        section_id = str((content.get("section") or {}).get("id") or "")
+        if section_id:
+            latest_by_section[section_id] = content
+    section_drafts = list(latest_by_section.values())
+    sources: list[Dict[str, Any]] = []
+    for draft in section_drafts:
+        sources.extend(source for source in (draft.get("sources") or []) if isinstance(source, dict))
+
+    continuity_artifact = _latest_artifact(project_id, "continuity_review")
+    rubric_artifact = _latest_artifact(project_id, "rubric_review")
+    revision_artifact = _latest_artifact(project_id, "targeted_revision")
+    profile = get_doc_type_profile(project.document_type)
+    summary = build_quality_summary(
+        project_text=f"{project.title}\n{project.initial_request}",
+        sources=sources,
+        section_drafts=section_drafts,
+        continuity=continuity_artifact.content if continuity_artifact else None,
+        rubric=rubric_artifact.content if rubric_artifact else None,
+        citations_enabled=bool(profile.get("citations_enabled", True)),
+        sentence_repair=(
+            (revision_artifact.content or {}).get("sentence_quality_repair")
+            if revision_artifact
+            else None
+        ),
+        document_type=str(profile.get("key") or "report"),
+    )
+    if draft_artifact is not None and project.current_phase != "final_merge":
+        summary["status"] = "review_needed"
+        summary["warnings"] = list(
+            dict.fromkeys([*(summary.get("warnings") or []), "stale_due_inputs"])
+        )
+    if draft_artifact is None:
+        return summary
+    return _apply_quality_decisions(project_id, draft_artifact.id, summary)
 
 
 def _draft_conditions(project_id: str) -> Dict[str, Any]:
@@ -2210,7 +2506,11 @@ def restore_draft_version(project_id: str, artifact_id: str) -> Optional[Artifac
             now,
             source.node_id,
         )
-    return get_artifact(project_id, new_id)
+    restored = get_artifact(project_id, new_id)
+    summary = get_project_quality_summary(project_id)
+    if summary is not None:
+        _sync_project_quality_status(project_id, summary)
+    return restored
 
 
 def run_document_generation(
@@ -3086,23 +3386,50 @@ def _run_document_generation(
                         )
                     chapter_summaries = []
                 current_chapter_id = section_chapter
-                section_sources = _sources_for_section(section, chapter_sources, research)
+                project_text = f"{project.title} {project.initial_request}"
+                section_sources = _sources_for_section(
+                    section, chapter_sources, research, project_text=project_text
+                )
+                needs_source_quality_topup = (
+                    is_high_stakes_topic(project_text)
+                    and best_overlap_score(
+                        section,
+                        [
+                            source
+                            for source in section_sources
+                            if grade_source(source)["tier"]
+                            in {"authoritative", "institutional"}
+                        ],
+                    )
+                    == 0
+                )
                 # Top-up search: when nothing in the research pool matches this
-                # section, one extra targeted search beats writing sourceless.
+                # section, or a high-stakes section lacks strong sources, one
+                # extra targeted search beats writing weakly supported prose.
                 if (
                     effective_section_search_enabled(project_id)
                     and effective_search_enabled(project_id)
                     and len(topup_info) < settings.section_search_topup_limit
-                    and best_overlap_score(section, section_sources) == 0
+                    and (
+                        best_overlap_score(section, section_sources) == 0
+                        or needs_source_quality_topup
+                    )
                 ):
                     extra_sources, topup_error, topup_query = search_section_sources(
-                        section, settings.chapter_search_results
+                        section,
+                        settings.chapter_search_results,
+                        project_text=project_text,
                     )
                     topup_info.append(
                         {
                             "section_id": str(section.get("id", "")),
                             "query": topup_query,
                             "source_count": len(extra_sources),
+                            "reason": (
+                                "missing_strong_source"
+                                if needs_source_quality_topup
+                                else "no_relevant_source"
+                            ),
                             "error": topup_error,
                         }
                     )
@@ -3141,10 +3468,103 @@ def _run_document_generation(
                 markdown = _ensure_markdown_heading_number(
                     markdown, section, numbered=profile.get("numbered_headings", True)
                 )
+                evidence = summary.get("evidence") or []
+                evidence_validation = validate_evidence_ledger(
+                    markdown=markdown,
+                    evidence=evidence,
+                    sources=section_sources,
+                    section=section,
+                )
+                evidence_repair: Dict[str, Any] = {
+                    "attempted": False,
+                    "succeeded": evidence_validation.get("status") == "valid",
+                }
+                if (
+                    profile.get("citations_enabled", True)
+                    and evidence_validation.get("status") == "needs_review"
+                ):
+                    cited_ids = evidence_validation.get("cited_source_ids") or []
+                    if not cited_ids:
+                        # Invalid unused ledger rows do not require another
+                        # model call; discard them and validate the empty or
+                        # remaining valid ledger deterministically.
+                        evidence = evidence_validation.get("valid_entries") or []
+                        summary["evidence"] = evidence
+                        evidence_validation = validate_evidence_ledger(
+                            markdown=markdown,
+                            evidence=evidence,
+                            sources=section_sources,
+                            section=section,
+                        )
+                        evidence_repair = {
+                            "attempted": False,
+                            "succeeded": evidence_validation.get("status") == "valid",
+                            "mode": "discarded_unused_invalid_entries",
+                        }
+                    elif settings.llm_enabled:
+                        evidence_repair = {"attempted": True, "succeeded": False}
+                        try:
+                            repaired_markdown, repaired_evidence, repair_usage = (
+                                repair_section_evidence(
+                                    project,
+                                    brief,
+                                    section,
+                                    markdown,
+                                    section_sources,
+                                    evidence_validation,
+                                )
+                            )
+                        except LLMError as exc:
+                            evidence_repair["error"] = str(exc)
+                        else:
+                            markdown = _ensure_markdown_heading_number(
+                                repaired_markdown,
+                                section,
+                                numbered=profile.get("numbered_headings", True),
+                            )
+                            evidence = repaired_evidence
+                            summary["evidence"] = evidence
+                            summary["claims"] = [
+                                str(item.get("claim") or "").strip()
+                                for item in evidence
+                                if str(item.get("claim") or "").strip()
+                            ][:5]
+                            summary["summary"] = markdown.split("\n\n", 1)[-1][:500]
+                            evidence_validation = validate_evidence_ledger(
+                                markdown=markdown,
+                                evidence=evidence,
+                                sources=section_sources,
+                                section=section,
+                            )
+                            evidence_repair.update(
+                                {
+                                    "succeeded": evidence_validation.get("status")
+                                    == "valid",
+                                    "remaining_invalid_entries": evidence_validation.get(
+                                        "invalid_entry_count", 0
+                                    ),
+                                    "remaining_unverified_citations": len(
+                                        evidence_validation.get(
+                                            "unverified_citation_ids"
+                                        )
+                                        or []
+                                    ),
+                                }
+                            )
+                            if repair_usage is not None:
+                                writing_usage.append(
+                                    {
+                                        "section_id": str(section.get("id", "")),
+                                        "evidence_repair": repair_usage,
+                                    }
+                                )
                 draft_content = {
                     "section": section,
                     "markdown": markdown,
                     "sources": section_sources,
+                    "evidence": evidence,
+                    "evidence_validation": evidence_validation,
+                    "evidence_repair": evidence_repair,
                 }
                 with get_connection() as conn:
                     artifact_ids.append(
@@ -3174,6 +3594,9 @@ def _run_document_generation(
                         "section": section,
                         "markdown": markdown,
                         "sources": section_sources,
+                        "evidence": evidence,
+                        "evidence_validation": evidence_validation,
+                        "evidence_repair": evidence_repair,
                         "artifact_id": artifact_ids[-1],
                         "updated_at": draft_artifact.updated_at if draft_artifact else utc_now_iso(),
                     }
@@ -3296,6 +3719,16 @@ def _run_document_generation(
                     "section": section,
                     "markdown": markdown,
                     "sources": draft.get("sources") or [],
+                    "evidence": draft.get("evidence") or [],
+                    "evidence_validation": {
+                        "status": "stale",
+                        "reason": "section_revised_after_evidence_capture",
+                    },
+                    "evidence_repair": {
+                        "attempted": False,
+                        "succeeded": False,
+                        "reason": "section_revised_after_evidence_capture",
+                    },
                 }
                 with get_connection() as conn:
                     artifact_ids.append(
@@ -3311,6 +3744,8 @@ def _run_document_generation(
                     )
                 revised_artifact = get_artifact(project_id, artifact_ids[-1])
                 draft["markdown"] = markdown
+                draft["evidence_validation"] = draft_content["evidence_validation"]
+                draft["evidence_repair"] = draft_content["evidence_repair"]
                 draft["artifact_id"] = artifact_ids[-1]
                 draft["updated_at"] = (
                     revised_artifact.updated_at if revised_artifact else utc_now_iso()
@@ -3489,11 +3924,49 @@ def _run_document_generation(
             else:
                 revised_sections, usage = section_drafts, None
             merged_sections = apply_section_revisions(section_drafts, revised_sections)
+            sentence_repair_report: Dict[str, Any] = {
+                "enabled": bool(
+                    settings.llm_enabled
+                    and getattr(settings, "sentence_quality_repair_enabled", True)
+                ),
+                "attempted": False,
+                "initial_issue_count": 0,
+                "final_issue_count": 0,
+                "attempted_section_count": 0,
+                "repaired_section_count": 0,
+                "results": [],
+                "remaining_issues": [],
+            }
+            sentence_repair_usage = None
+            if sentence_repair_report["enabled"]:
+                initial_sentence_quality = sentence_quality_stats(
+                    merged_sections,
+                    high_stakes=is_high_stakes_topic(
+                        f"{project.title} {project.initial_request}"
+                    ),
+                )
+                if initial_sentence_quality["issue_count"]:
+                    (
+                        merged_sections,
+                        sentence_repair_report,
+                        sentence_repair_usage,
+                    ) = repair_sentence_quality_sections(
+                        project,
+                        brief,
+                        merged_sections,
+                        initial_sentence_quality,
+                        high_stakes=is_high_stakes_topic(
+                            f"{project.title} {project.initial_request}"
+                        ),
+                        limit=getattr(settings, "sentence_quality_repair_limit", 3),
+                    )
+                    sentence_repair_report["enabled"] = True
             revision = {
                 "sections": merged_sections,
                 "changed": merged_sections != section_drafts,
                 "continuity_verdict": continuity.get("verdict"),
                 "rubric_verdict": rubric_review.get("verdict"),
+                "sentence_quality_repair": sentence_repair_report,
             }
             section_drafts = merged_sections
             with get_connection() as conn:
@@ -3512,8 +3985,19 @@ def _run_document_generation(
             revision_time = revision_artifact.updated_at if revision_artifact else utc_now_iso()
             _complete_agent_run(
                 run_id,
-                {"artifact_id": artifact_ids[-1], "changed": revision["changed"]},
-                token_usage=usage,
+                {
+                    "artifact_id": artifact_ids[-1],
+                    "changed": revision["changed"],
+                    "sentence_quality_repair": sentence_repair_report,
+                },
+                token_usage=(
+                    {
+                        "reviewer_revision": usage,
+                        "sentence_quality_repair": sentence_repair_usage,
+                    }
+                    if usage or sentence_repair_usage
+                    else None
+                ),
             )
 
         citation_style = effective_citation_style(project_id)
@@ -3564,11 +4048,17 @@ def _run_document_generation(
                         "sources": (
                             draft.get("sources")
                             or _sources_for_section(
-                                draft.get("section") or {}, chapter_sources, research
+                                draft.get("section") or {},
+                                chapter_sources,
+                                research,
+                                project_text=f"{project.title} {project.initial_request}",
                             )
                         )
                         if citations_enabled
                         else [],
+                        "evidence": draft.get("evidence") or [],
+                        "evidence_validation": draft.get("evidence_validation"),
+                        "evidence_repair": draft.get("evidence_repair"),
                     }
                     for draft in section_drafts
                 ],
@@ -3601,10 +4091,21 @@ def _run_document_generation(
                 accessed_at=research_cutoff,
                 profile=profile,
             )
+            quality_summary = build_quality_summary(
+                project_text=f"{project.title}\n{project.initial_request}",
+                sources=used_sources,
+                section_drafts=renumbered_drafts,
+                continuity=continuity,
+                rubric=rubric_review,
+                citations_enabled=citations_enabled,
+                sentence_repair=revision.get("sentence_quality_repair"),
+                document_type=str(profile.get("key") or "report"),
+            )
             final_content = {
                 "format": "markdown",
                 "markdown": final_markdown,
                 "conditions": _draft_conditions(project_id),
+                "quality": quality_summary,
             }
             with get_connection() as conn:
                 artifact_ids.append(
@@ -3628,6 +4129,12 @@ def _run_document_generation(
                 token_usage=usage,
             )
 
+        quality_summary = get_project_quality_summary(project_id) or {"status": "review_needed"}
+        final_status = (
+            "review_needed"
+            if quality_summary.get("status") == "review_needed"
+            else "completed"
+        )
         with get_connection() as conn:
             completed_at = utc_now_iso()
             conn.execute(
@@ -3636,7 +4143,7 @@ def _run_document_generation(
                 SET status = ?, current_phase = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                ("completed", "final_merge", completed_at, project_id),
+                (final_status, "final_merge", completed_at, project_id),
             )
     except LLMError as exc:
         fail(run_id, get_project(project_id).current_phase if get_project(project_id) else "unknown", exc)
@@ -3655,8 +4162,12 @@ def _run_document_generation(
         project=updated_project,
         artifacts=artifacts,
         pending_questions=[],
-        status="completed",
-        message="Staged writing pipeline completed.",
+        status=updated_project.status,
+        message=(
+            "Draft generated; quality review is recommended."
+            if updated_project.status == "review_needed"
+            else "Staged writing pipeline completed."
+        ),
     )
 
 

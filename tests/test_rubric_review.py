@@ -101,7 +101,7 @@ class TestReviewRubricStaged:
         review, usage = review_rubric_staged(
             _project(), {}, get_doc_type_profile("report"), _drafts()
         )
-        assert review["verdict"] == "pass"
+        assert review["verdict"] == "incomplete"
         assert "failed" in review["notes"]
         assert usage is None
 
@@ -133,3 +133,11 @@ class TestCombineReviews:
         combined = _combine_reviews({"issues": []}, {"issues": []})
         assert combined["verdict"] == "pass"
         assert combined["revision_targets"] == []
+
+    def test_issue_ids_become_targets_even_when_reviewer_omits_them(self):
+        combined = _combine_reviews(
+            {"issues": [{"affected_ids": ["1.2"], "description": "Repeated"}]},
+            {"issues": ["Section 2.1 lacks evidence"]},
+        )
+        assert combined["verdict"] == "needs_revision"
+        assert combined["revision_targets"] == ["1.2", "2.1"]

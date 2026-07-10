@@ -16,6 +16,7 @@ const state = {
   artifacts: [],
   references: [],
   projectSettings: null,
+  quality: null,
   viewDraftId: null,
   versionsOpen: false,
   progress: null,
@@ -45,6 +46,7 @@ const translations = {
     characters: "Characters",
     checkingApi: "Checking API status",
     completed: "completed",
+    review_needed: "review needed",
     createProject: "Create Project",
     created: "created",
     contents: "Contents",
@@ -185,6 +187,58 @@ const translations = {
     rerunFromHere: "Rerun from here",
     reviewDraft: "Review the draft",
     reviewDraftBody: "The staged pipeline completed. Review the draft preview or inspect intermediate artifacts.",
+    qualitySummary: "Quality Summary",
+    qualityReady: "Ready",
+    qualityReviewNeeded: "Review needed",
+    strongSources: "Strong sources",
+    lowQualitySources: "Low-quality sources",
+    citedParagraphs: "Cited paragraphs",
+    verifiedEvidence: "Verified citations",
+    reviewIssues: "Review findings",
+    writingIssues: "Writing flags",
+    structureIssues: "Readability flags",
+    improveDraft: "Improve Draft",
+    regenerateDraft: "Regenerate Draft",
+    qualityWarning_low_quality_sources: "Some claims rely on wiki, blog, community, or unidentified sources.",
+    qualityWarning_high_stakes_without_strong_sources: "This high-stakes topic has no government, academic, or institutional source.",
+    qualityWarning_review_findings: "The reviewers found issues that should be checked after automatic revision.",
+    qualityWarning_review_incomplete: "One or more automatic quality reviews did not complete.",
+    qualityWarning_no_cited_paragraphs: "No eligible body paragraph contains a citation.",
+    qualityWarning_unverified_evidence: "Some cited claims do not have a valid excerpt in the evidence ledger.",
+    qualityWarning_stale_evidence: "Some evidence ledgers are missing or stale after section revision.",
+    qualityWarning_stale_due_inputs: "The displayed draft predates the latest input or partial run.",
+    qualityWarning_duplicate_content: "Potentially repeated sentences were found across the draft.",
+    qualityWarning_possible_contradictions: "Highly similar statements with opposing polarity were found.",
+    qualityWarning_unsupported_overclaims: "This high-stakes draft contains absolute claims without inline evidence.",
+    qualityWarning_long_sentences: "Some sentences are long enough to reduce readability.",
+    qualityWarning_long_paragraphs: "Some paragraphs are too dense for the selected document type.",
+    qualityWarning_list_heavy_sections: "Some sections rely on lists for most of their content.",
+    qualityWarning_heading_structure: "One or more sections have a missing or additional Markdown heading.",
+    qualityWarning_missing_introduction: "This long-form document has no identifiable introduction or context section.",
+    qualityWarning_missing_conclusion: "This long-form document has no identifiable conclusion, summary, or recommendations section.",
+    writingIssue_duplicate: "Possible repetition ({sections}): {excerpt}",
+    writingIssue_possible_contradiction: "Possible contradiction ({sections}): {excerpt}",
+    writingIssue_unsupported_overclaim: "Unsupported absolute claim ({sections}): {excerpt}",
+    writingRepairSummary: "Automatic sentence repair improved {repaired} of {attempted} targeted sections.",
+    qualityReviewTarget: "Review target section {sections}",
+    jumpToQualityIssue: "Jump to section {id}",
+    qualityIssueNotFound: "The target section could not be located in the latest draft.",
+    acknowledgeIssue: "Reviewed",
+    waiveIssue: "Allow exception",
+    clearIssueDecision: "Undo",
+    issueDecisionReason: "Record why this issue was reviewed or should be treated as an exception:",
+    issueAcknowledged: "Reviewed: {reason}",
+    issueWaived: "Exception: {reason}",
+    issueDecisionSaved: "Quality issue decision saved.",
+    issueDecisionCleared: "Quality issue decision removed.",
+    requestIssueFix: "Request fix",
+    qualityFeedbackTemplate: "Resolve this quality issue in section {sections}: {issue}\nProblem excerpt: {excerpt}",
+    structureIssue_long_sentence: "Long sentence ({sections}): {excerpt}",
+    structureIssue_long_paragraph: "Dense paragraph ({sections}): {excerpt}",
+    structureIssue_list_heavy: "List-heavy section ({sections}): {excerpt}",
+    structureIssue_heading_structure: "Heading structure ({sections}): {excerpt}",
+    structureIssue_missing_introduction: "Introduction not identified near {sections}: {excerpt}",
+    structureIssue_missing_conclusion: "Conclusion not identified near {sections}: {excerpt}",
     saveAllAnswers: "Save All Answers",
     saveAnswersAndRun: "Save & Start Writing",
     saveArtifact: "Save Artifact",
@@ -248,6 +302,7 @@ const translations = {
     characters: "문자 수",
     checkingApi: "API 상태 확인 중",
     completed: "완료",
+    review_needed: "검토 필요",
     createProject: "프로젝트 생성",
     created: "생성",
     contents: "목차",
@@ -261,6 +316,58 @@ const translations = {
       '"{title}" 프로젝트를 삭제할까요? 질문, 답변, 산출물, 요약, 실행 로그가 모두 삭제됩니다.',
     draftEmpty: "파이프라인을 실행하면 초안이 생성됩니다.",
     draftPreview: "초안 미리보기",
+    qualitySummary: "품질 요약",
+    qualityReady: "준비됨",
+    qualityReviewNeeded: "검토 필요",
+    strongSources: "신뢰 출처",
+    lowQualitySources: "저신뢰 출처",
+    citedParagraphs: "인용 문단",
+    verifiedEvidence: "검증된 인용",
+    reviewIssues: "검토 이슈",
+    writingIssues: "문장 품질 이슈",
+    structureIssues: "구조·가독성 이슈",
+    improveDraft: "문서 개선",
+    regenerateDraft: "초안 다시 생성",
+    qualityWarning_low_quality_sources: "일부 주장이 위키·블로그·커뮤니티 또는 식별되지 않은 출처에 의존합니다.",
+    qualityWarning_high_stakes_without_strong_sources: "고위험 주제이지만 정부·학술·기관 출처가 없습니다.",
+    qualityWarning_review_findings: "자동 수정 후 다시 확인해야 할 검토 이슈가 있습니다.",
+    qualityWarning_review_incomplete: "일부 자동 품질 검토가 완료되지 않았습니다.",
+    qualityWarning_no_cited_paragraphs: "인용 가능한 본문 문단에 인용이 없습니다.",
+    qualityWarning_unverified_evidence: "일부 인용 주장에 출처 원문과 일치하는 근거가 없습니다.",
+    qualityWarning_stale_evidence: "섹션 수정 후 인용 근거 기록이 없거나 오래된 상태입니다.",
+    qualityWarning_stale_due_inputs: "표시된 초안은 최신 입력 또는 부분 실행보다 이전 버전입니다.",
+    qualityWarning_duplicate_content: "초안에서 반복 가능성이 높은 문장을 발견했습니다.",
+    qualityWarning_possible_contradictions: "표현은 유사하지만 긍정·부정 방향이 상반된 문장을 발견했습니다.",
+    qualityWarning_unsupported_overclaims: "고위험 문서에 인용 근거 없는 단정 표현이 있습니다.",
+    qualityWarning_long_sentences: "읽기 어려울 정도로 긴 문장이 있습니다.",
+    qualityWarning_long_paragraphs: "선택한 문서 유형에 비해 지나치게 조밀한 문단이 있습니다.",
+    qualityWarning_list_heavy_sections: "내용 대부분을 목록에 의존하는 섹션이 있습니다.",
+    qualityWarning_heading_structure: "제목이 없거나 제목이 추가된 섹션이 있습니다.",
+    qualityWarning_missing_introduction: "장문 문서의 도입·배경 섹션을 식별할 수 없습니다.",
+    qualityWarning_missing_conclusion: "장문 문서의 결론·요약·제언 섹션을 식별할 수 없습니다.",
+    writingIssue_duplicate: "반복 가능성 ({sections}): {excerpt}",
+    writingIssue_possible_contradiction: "상반된 진술 가능성 ({sections}): {excerpt}",
+    writingIssue_unsupported_overclaim: "근거 없는 단정 ({sections}): {excerpt}",
+    writingRepairSummary: "문장 자동 보정 대상 {attempted}개 중 {repaired}개 섹션을 개선했습니다.",
+    qualityReviewTarget: "검토 대상 섹션 {sections}",
+    jumpToQualityIssue: "섹션 {id}로 이동",
+    qualityIssueNotFound: "최신 초안에서 대상 섹션을 찾을 수 없습니다.",
+    acknowledgeIssue: "확인 완료",
+    waiveIssue: "예외 처리",
+    clearIssueDecision: "해제",
+    issueDecisionReason: "이 이슈를 확인했거나 예외로 처리하는 이유를 기록하세요:",
+    issueAcknowledged: "확인 완료: {reason}",
+    issueWaived: "예외 처리: {reason}",
+    issueDecisionSaved: "품질 이슈 처리를 저장했습니다.",
+    issueDecisionCleared: "품질 이슈 처리를 해제했습니다.",
+    requestIssueFix: "수정 요청",
+    qualityFeedbackTemplate: "섹션 {sections}의 품질 이슈를 수정하세요: {issue}\n문제 문장: {excerpt}",
+    structureIssue_long_sentence: "긴 문장 ({sections}): {excerpt}",
+    structureIssue_long_paragraph: "조밀한 문단 ({sections}): {excerpt}",
+    structureIssue_list_heavy: "목록 편중 ({sections}): {excerpt}",
+    structureIssue_heading_structure: "제목 구조 ({sections}): {excerpt}",
+    structureIssue_missing_introduction: "도입부 확인 필요 ({sections}): {excerpt}",
+    structureIssue_missing_conclusion: "결론부 확인 필요 ({sections}): {excerpt}",
     duration: "소요 시간",
     editAnswer: "답변 수정",
     emptyBody: "왼쪽에서 프로젝트를 선택하거나 새 프로젝트를 만들어 작성 파이프라인을 시작하세요.",
@@ -534,6 +641,16 @@ const els = {
   stripPercent: document.querySelector("#stripPercent"),
   pipelinePanel: document.querySelector("#pipelinePanel"),
   pipelineSummaryText: document.querySelector("#pipelineSummaryText"),
+  qualityPanel: document.querySelector("#qualityPanel"),
+  qualityStatus: document.querySelector("#qualityStatus"),
+  qualityStrongSources: document.querySelector("#qualityStrongSources"),
+  qualityLowSources: document.querySelector("#qualityLowSources"),
+  qualityCitationCoverage: document.querySelector("#qualityCitationCoverage"),
+  qualityEvidenceCoverage: document.querySelector("#qualityEvidenceCoverage"),
+  qualityIssueCount: document.querySelector("#qualityIssueCount"),
+  qualityWritingIssueCount: document.querySelector("#qualityWritingIssueCount"),
+  qualityStructureIssueCount: document.querySelector("#qualityStructureIssueCount"),
+  qualityWarnings: document.querySelector("#qualityWarnings"),
   nextAction: document.querySelector("#nextAction"),
   nextActionTitle: document.querySelector("#nextActionTitle"),
   nextActionBody: document.querySelector("#nextActionBody"),
@@ -883,6 +1000,7 @@ async function deleteProject(project) {
       state.questions = [];
       state.artifacts = [];
       state.progress = null;
+      state.quality = null;
     }
     showToast(t("projectDeleted"));
     await loadProjects();
@@ -921,9 +1039,11 @@ async function renderSelectedProject() {
     loadArtifacts(),
     loadReferences(),
     loadProjectSettings(),
+    loadQuality(),
   ]);
   renderNextAction();
   renderDraftPreview();
+  renderQuality();
   renderTabs();
   applyLayoutPhase();
 
@@ -940,6 +1060,327 @@ async function loadProgress() {
 
   state.progress = await api(`/projects/${project.id}/progress`);
   renderProgress();
+}
+
+async function loadQuality() {
+  const project = selectedProject();
+  if (!project) return;
+
+  state.quality = null;
+  state.quality = await api(`/projects/${project.id}/quality`);
+  renderQuality();
+}
+
+function renderQuality() {
+  if (!els.qualityPanel) return;
+  const quality = state.quality;
+  if (!quality || !latestDraft()) {
+    els.qualityPanel.classList.add("hidden");
+    return;
+  }
+
+  els.qualityPanel.classList.remove("hidden", "review-needed", "ready");
+  const needsReview = quality.status === "review_needed";
+  els.qualityPanel.classList.add(needsReview ? "review-needed" : "ready");
+  els.qualityStatus.textContent = t(needsReview ? "qualityReviewNeeded" : "qualityReady");
+  if (needsReview) {
+    els.detailStatus.textContent = t("qualityReviewNeeded");
+    els.stripMessage.textContent = t("qualityReviewNeeded");
+    if (!els.runButton.disabled) els.runButton.textContent = t("improveDraft");
+  } else {
+    const project = selectedProject();
+    if (project) els.detailStatus.textContent = statusLabel(project.status);
+    if (!els.runButton.disabled) els.runButton.textContent = t("regenerateDraft");
+  }
+
+  const source = quality.source_quality || {};
+  const citations = quality.citations || {};
+  const evidence = quality.evidence || {};
+  const writing = quality.writing_quality || {};
+  const structure = quality.structure_quality || {};
+  const review = quality.review || {};
+  els.qualityStrongSources.textContent = String(source.strong_source_count || 0);
+  els.qualityLowSources.textContent = String(source.low_quality_count || 0);
+  els.qualityCitationCoverage.textContent =
+    citations.cited_paragraph_percent == null ? "-" : `${citations.cited_paragraph_percent}%`;
+  els.qualityEvidenceCoverage.textContent =
+    evidence.verified_citation_percent == null ? "-" : `${evidence.verified_citation_percent}%`;
+  els.qualityIssueCount.textContent = String(review.issue_count || 0);
+  els.qualityWritingIssueCount.textContent = String(
+    writing.active_issue_count ?? writing.issue_count ?? 0,
+  );
+  els.qualityStructureIssueCount.textContent = String(
+    structure.active_issue_count ?? structure.issue_count ?? 0,
+  );
+  els.qualityWarnings.innerHTML = "";
+  for (const warning of quality.warnings || []) {
+    const item = document.createElement("li");
+    item.textContent = t(`qualityWarning_${warning}`);
+    els.qualityWarnings.append(item);
+  }
+  const linkedSections = new Set();
+  for (const issue of qualityIssueDisplayList(writing.issues, 6)) {
+    appendQualityIssueLink(issue, `writingIssue_${issue.type}`, linkedSections);
+  }
+  for (const issue of qualityIssueDisplayList(structure.issues, 6)) {
+    appendQualityIssueLink(issue, `structureIssue_${issue.type}`, linkedSections);
+  }
+  const reviewTargets = review.target_issues || (review.revision_targets || []).map(
+    (sectionId) => ({ type: "review_target", section_ids: [String(sectionId)], excerpts: [] }),
+  );
+  for (const reviewIssue of reviewTargets.slice(0, 4)) {
+    const sectionId = qualityIssueTargetSection(reviewIssue);
+    if (linkedSections.has(String(sectionId))) continue;
+    appendQualityIssueLink(
+      reviewIssue,
+      "qualityReviewTarget",
+      linkedSections,
+    );
+  }
+  const writingRepair = writing.repair || {};
+  if (writingRepair.attempted) {
+    const item = document.createElement("li");
+    item.className = "quality-repair-summary";
+    item.textContent = t("writingRepairSummary", {
+      attempted: writingRepair.attempted_section_count || 0,
+      repaired: writingRepair.repaired_section_count || 0,
+    });
+    els.qualityWarnings.append(item);
+  }
+  els.qualityWarnings.classList.toggle("hidden", !els.qualityWarnings.children.length);
+}
+
+function qualityIssueTargetSection(issue) {
+  const ids = (issue?.section_ids || []).map(String).filter(Boolean);
+  if (!ids.length) return "";
+  return ["duplicate", "possible_contradiction"].includes(issue.type)
+    ? ids[ids.length - 1]
+    : ids[0];
+}
+
+function qualityIssueDisplayList(issues, limit) {
+  return [...(issues || [])]
+    .sort((left, right) => Number(left.decision?.decision === "waived") - Number(right.decision?.decision === "waived"))
+    .slice(0, limit);
+}
+
+function appendQualityIssueLink(issue, labelKey, linkedSections) {
+  const sectionId = qualityIssueTargetSection(issue);
+  const sections = (issue.section_ids || []).map(String).join(", ") || "-";
+  const label = t(labelKey, {
+    sections,
+    excerpt: (issue.excerpts || [""])[0],
+  });
+  const item = document.createElement("li");
+  item.className = "quality-writing-detail";
+  const decision = issue.decision || null;
+  if (decision?.decision) item.classList.add(`quality-${decision.decision}`);
+  if (!sectionId) {
+    item.textContent = label;
+  } else {
+    const row = document.createElement("div");
+    row.className = "quality-issue-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quality-issue-link";
+    button.textContent = label;
+    button.title = t("jumpToQualityIssue", { id: sectionId });
+    button.setAttribute("aria-label", `${label}. ${button.title}`);
+    button.addEventListener("click", () => focusQualityIssue(issue));
+    row.append(button);
+    const canRequestFix = hasStoredSectionDraft(sectionId);
+    if (canRequestFix || (issue.issue_key && issue.type !== "review_target")) {
+      const actions = document.createElement("span");
+      actions.className = "quality-issue-actions";
+      if (canRequestFix) {
+        const fix = document.createElement("button");
+        fix.type = "button";
+        fix.className = "quality-decision-action quality-fix-action";
+        fix.textContent = t("requestIssueFix");
+        fix.addEventListener("click", () => openQualityIssueFeedback(issue, label));
+        actions.append(fix);
+      }
+      if (issue.issue_key && issue.type !== "review_target" && decision?.decision) {
+        const badge = document.createElement("span");
+        badge.className = "quality-decision-badge";
+        badge.textContent = t(
+          decision.decision === "waived" ? "issueWaived" : "issueAcknowledged",
+          { reason: decision.reason },
+        );
+        badge.title = badge.textContent;
+        actions.append(badge);
+        const clear = document.createElement("button");
+        clear.type = "button";
+        clear.className = "quality-decision-action";
+        clear.textContent = t("clearIssueDecision");
+        clear.addEventListener("click", () => clearQualityIssueDecision(issue));
+        actions.append(clear);
+      } else if (issue.issue_key && issue.type !== "review_target") {
+        for (const [action, key] of [
+          ["acknowledged", "acknowledgeIssue"],
+          ["waived", "waiveIssue"],
+        ]) {
+          const actionButton = document.createElement("button");
+          actionButton.type = "button";
+          actionButton.className = "quality-decision-action";
+          actionButton.textContent = t(key);
+          actionButton.addEventListener("click", () => saveQualityIssueDecision(issue, action));
+          actions.append(actionButton);
+        }
+      }
+      row.append(actions);
+    }
+    item.append(row);
+    linkedSections?.add(sectionId);
+  }
+  els.qualityWarnings.append(item);
+}
+
+function hasStoredSectionDraft(sectionId) {
+  return state.artifacts.some(
+    (artifact) =>
+      artifact.type === "section_draft" &&
+      String(artifact.content?.section?.id || "") === String(sectionId),
+  );
+}
+
+async function refreshQualityDecisionState(summary) {
+  state.quality = summary;
+  state.projects = await api("/projects");
+  renderProjects();
+  renderQuality();
+  renderStatusStrip();
+}
+
+async function saveQualityIssueDecision(issue, decision) {
+  const project = selectedProject();
+  if (!project || !issue.issue_key) return;
+  const reason = window.prompt(t("issueDecisionReason"), issue.decision?.reason || "");
+  if (!reason?.trim()) return;
+  try {
+    const summary = await api(
+      `/projects/${project.id}/quality/issues/${encodeURIComponent(issue.issue_key)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ decision, reason: reason.trim() }),
+      },
+    );
+    await refreshQualityDecisionState(summary);
+    showToast(t("issueDecisionSaved"));
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function clearQualityIssueDecision(issue) {
+  const project = selectedProject();
+  if (!project || !issue.issue_key) return;
+  try {
+    const summary = await api(
+      `/projects/${project.id}/quality/issues/${encodeURIComponent(issue.issue_key)}`,
+      { method: "DELETE" },
+    );
+    await refreshQualityDecisionState(summary);
+    showToast(t("issueDecisionCleared"));
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function normalizeQualityExcerpt(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\[\[?\d+\]?\](?:\([^)]*\))?/g, " ")
+    .replace(/\]\([^)]*\)/g, "]")
+    .replace(/[^0-9a-z가-힣]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function qualityIssueTextTarget(heading, issue) {
+  if (!["duplicate", "possible_contradiction", "unsupported_overclaim", "long_sentence", "long_paragraph"].includes(issue.type)) {
+    return heading;
+  }
+  const needle = normalizeQualityExcerpt((issue.excerpts || [""])[0]);
+  if (!needle) return heading;
+  const candidates = [];
+  let sibling = heading.nextElementSibling;
+  while (sibling && !sibling.matches("h1, h2, h3, h4, h5, h6")) {
+    if (sibling.matches("p, li, blockquote, td")) candidates.push(sibling);
+    candidates.push(...sibling.querySelectorAll("p, li, blockquote, td"));
+    sibling = sibling.nextElementSibling;
+  }
+  const needleHead = needle.slice(0, Math.min(90, needle.length));
+  return (
+    candidates.find((candidate) => {
+      const haystack = normalizeQualityExcerpt(candidate.textContent);
+      return (
+        haystack.includes(needleHead) ||
+        (haystack.length >= 20 && needle.includes(haystack.slice(0, 60)))
+      );
+    }) || heading
+  );
+}
+
+async function prepareQualityIssueLocation(issue) {
+  const sectionId = qualityIssueTargetSection(issue);
+  if (!sectionId) return null;
+  // Quality always describes the latest draft. Leave an older version or raw
+  // view before locating its rendered section nodes.
+  state.viewDraftId = null;
+  state.draftView = "rendered";
+  renderDraftPreview();
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  const heading = [...els.draftPreview.querySelectorAll("[data-section-id]")].find(
+    (node) => node.dataset.sectionId === sectionId,
+  );
+  return heading
+    ? { sectionId, heading, target: qualityIssueTextTarget(heading, issue) }
+    : null;
+}
+
+function highlightQualityLocation(location) {
+  for (const node of els.draftPreview.querySelectorAll(".quality-focus")) {
+    node.classList.remove("quality-focus");
+  }
+  location.target.classList.add("quality-focus");
+  location.target.setAttribute("tabindex", "-1");
+  location.target.scrollIntoView({ behavior: "smooth", block: "center" });
+  location.target.focus({ preventScroll: true });
+  window.setTimeout(() => {
+    location.target.classList.remove("quality-focus");
+    location.target.removeAttribute("tabindex");
+  }, 3200);
+}
+
+async function focusQualityIssue(issue) {
+  const location = await prepareQualityIssueLocation(issue);
+  if (!location) {
+    showToast(t("qualityIssueNotFound"), true);
+    return;
+  }
+  highlightQualityLocation(location);
+}
+
+async function openQualityIssueFeedback(issue, issueLabel) {
+  const location = await prepareQualityIssueLocation(issue);
+  if (!location) {
+    showToast(t("qualityIssueNotFound"), true);
+    return;
+  }
+  highlightQualityLocation(location);
+  const comment = t("qualityFeedbackTemplate", {
+    sections: (issue.section_ids || []).join(", ") || location.sectionId,
+    issue: issueLabel,
+    excerpt: (issue.excerpts || [""])[0] || "-",
+  });
+  const panel = await toggleSectionFeedbackPanel(
+    location.sectionId,
+    location.heading,
+    comment,
+  );
+  panel?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 async function loadReferences() {
@@ -1350,7 +1791,13 @@ function stopRunPolling() {
 
 function setRunButtonRunning(isRunning) {
   els.runButton.disabled = isRunning;
-  els.runButton.textContent = isRunning ? t("writing") : t("startWriting");
+  const project = selectedProject();
+  const idleLabel = project?.status === "review_needed" || state.quality?.status === "review_needed"
+    ? t("improveDraft")
+    : latestDraft()
+      ? t("regenerateDraft")
+      : t("startWriting");
+  els.runButton.textContent = isRunning ? t("writing") : idleLabel;
   if (els.cancelButton) {
     els.cancelButton.classList.toggle("hidden", !isRunning);
     if (isRunning) {
@@ -2055,10 +2502,15 @@ function sectionDraftIndex() {
 
 function attachSectionFeedbackButtons() {
   const byTitle = sectionDraftIndex();
-  if (byTitle.size === 0) return;
   for (const heading of els.draftPreview.querySelectorAll("h2, h3, h4, h5, h6")) {
-    const sectionId = byTitle.get(normalizeSectionHeadingText(heading.textContent));
+    const numericId = heading.textContent.trim().match(/^(\d+(?:\.\d+)+)\s+/)?.[1];
+    const sectionId =
+      numericId || byTitle.get(normalizeSectionHeadingText(heading.textContent));
     if (!sectionId) continue;
+    heading.dataset.sectionId = sectionId;
+    // Feedback needs a stored section artifact; navigation only needs the
+    // deterministic numeric heading id and remains available for stale drafts.
+    if (byTitle.size === 0 && numericId) continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "section-feedback-button";
@@ -2094,17 +2546,23 @@ function renderFeedbackHistory(container, items) {
   }
 }
 
-async function toggleSectionFeedbackPanel(sectionId, heading) {
+async function toggleSectionFeedbackPanel(sectionId, heading, initialComment = "") {
   const project = selectedProject();
   if (!project) return;
 
   const wasOpen = els.draftPreview.querySelector(
     `.section-feedback-panel[data-section-id="${sectionId}"]`,
   );
+  if (wasOpen && initialComment) {
+    const textarea = wasOpen.querySelector("textarea");
+    textarea.value = initialComment;
+    textarea.focus();
+    return wasOpen;
+  }
   for (const panel of els.draftPreview.querySelectorAll(".section-feedback-panel")) {
     panel.remove();
   }
-  if (wasOpen) return;
+  if (wasOpen) return null;
 
   const panel = document.createElement("div");
   panel.className = "section-feedback-panel";
@@ -2135,6 +2593,7 @@ async function toggleSectionFeedbackPanel(sectionId, heading) {
   await loadHistory();
 
   const textarea = panel.querySelector("textarea");
+  textarea.value = initialComment;
   panel.querySelector(".feedback-save").addEventListener("click", async () => {
     const comment = textarea.value.trim();
     if (!comment) return;
@@ -2152,6 +2611,7 @@ async function toggleSectionFeedbackPanel(sectionId, heading) {
   });
   panel.querySelector(".feedback-close").addEventListener("click", () => panel.remove());
   textarea.focus();
+  return panel;
 }
 
 function layoutPhase() {
@@ -2198,7 +2658,7 @@ function renderStatusStrip() {
   } else if (phase === "attention") {
     message = project.status === "cancelled" ? t("runCancelled") : t("pipelineFailed");
   } else if (phase === "review") {
-    message = t("reviewDraft");
+    message = project.status === "review_needed" ? t("qualityReviewNeeded") : t("reviewDraft");
   } else {
     message = t("startWritingAction");
   }
@@ -2304,6 +2764,7 @@ function rerenderCurrentView() {
   renderQuestions();
   renderArtifacts();
   renderDraftPreview();
+  renderQuality();
   renderNextAction();
   renderTabs();
   if (selectedProject()) {

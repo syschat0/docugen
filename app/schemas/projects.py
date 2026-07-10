@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -91,6 +91,32 @@ class ProjectRead(BaseModel):
     current_phase: str | None
     created_at: str
     updated_at: str
+
+
+class ProjectQualityRead(BaseModel):
+    draft_id: str | None = None
+    status: Literal["ready", "review_needed"]
+    high_stakes: bool = False
+    source_quality: dict[str, Any]
+    citations: dict[str, Any]
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    writing_quality: dict[str, Any] = Field(default_factory=dict)
+    structure_quality: dict[str, Any] = Field(default_factory=dict)
+    review: dict[str, Any]
+    warnings: list[str]
+
+
+class QualityIssueDecisionUpsert(BaseModel):
+    decision: Literal["acknowledged", "waived"]
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _trim_reason(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("Decision reason is required")
+        return cleaned
 
 
 class ProjectReferenceRead(BaseModel):

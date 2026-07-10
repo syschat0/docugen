@@ -135,6 +135,19 @@ def init_db() -> None:
               FOREIGN KEY (project_id) REFERENCES projects(id)
             );
 
+            CREATE TABLE IF NOT EXISTS quality_issue_decisions (
+              id TEXT PRIMARY KEY,
+              project_id TEXT NOT NULL,
+              draft_id TEXT NOT NULL,
+              issue_key TEXT NOT NULL,
+              decision TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(project_id, draft_id, issue_key),
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+
             CREATE TABLE IF NOT EXISTS agent_runs (
               id TEXT PRIMARY KEY,
               project_id TEXT NOT NULL,

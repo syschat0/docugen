@@ -2,6 +2,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from collections import Counter
 from typing import Any, Dict
 
 from app.core.config import settings
@@ -10,6 +11,14 @@ from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
 from app.services.citations import citation_markers
 from app.services.doc_types import DEFAULT_DOC_TYPE, DOC_TYPES, get_doc_type_profile
+from app.services.quality import (
+    grade_source,
+    is_high_stakes_topic,
+    issue_section_ids,
+    relevant_evidence_passages,
+    sentence_quality_stats,
+    validate_evidence_ledger,
+)
 from app.services.search_options import current_search_options
 
 
@@ -227,6 +236,7 @@ def _summary_from_parsed_response(parsed: Dict[str, Any]) -> Dict[str, Any] | No
         "terms",
         "open_threads",
         "next_section_handoff",
+        "evidence",
     }
     if summary_keys.intersection(parsed.keys()):
         return {
@@ -236,6 +246,7 @@ def _summary_from_parsed_response(parsed: Dict[str, Any]) -> Dict[str, Any] | No
             "terms": parsed.get("terms", []),
             "open_threads": parsed.get("open_threads", []),
             "next_section_handoff": parsed.get("next_section_handoff", ""),
+            "evidence": parsed.get("evidence", []),
         }
 
     for key in ("section", "draft", "document", "result", "output"):
@@ -300,8 +311,11 @@ def select_relevant_sources(
 
     section_words = _section_words(section)
 
-    def score(source: Dict[str, Any]) -> int:
-        return len(section_words & _source_words(source))
+    def score(source: Dict[str, Any]) -> tuple[int, int]:
+        return (
+            len(section_words & _source_words(source)),
+            int(grade_source(source)["score"]),
+        )
 
     ranked = sorted(usable, key=score, reverse=True)
     return ranked[:limit]
@@ -312,6 +326,7 @@ def select_section_sources(
     chapter_candidates: list[Dict[str, Any]],
     global_candidates: list[Dict[str, Any]],
     limit: int = 2,
+    project_text: str = "",
 ) -> list[Dict[str, Any]]:
     """Pick section sources, preferring the section's own chapter research.
 
@@ -325,17 +340,54 @@ def select_section_sources(
     def usable(sources: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         return [s for s in sources if isinstance(s, dict) and s.get("url")]
 
-    def score(source: Dict[str, Any]) -> int:
+    def overlap(source: Dict[str, Any]) -> int:
         return len(section_words & _source_words(source))
 
+    def score(source: Dict[str, Any]) -> tuple[int, int]:
+        return overlap(source), int(grade_source(source)["score"])
+
     chapter_ranked = sorted(usable(chapter_candidates), key=score, reverse=True)
-    picked = [source for source in chapter_ranked if score(source) > 0][:limit]
+    global_usable = usable(global_candidates)
+    picked: list[Dict[str, Any]] = []
+    topic_text = " ".join(
+        [project_text, str(section.get("title") or ""), str(section.get("purpose") or "")]
+        + [str(point) for point in (section.get("key_points") or [])]
+    )
+    if is_high_stakes_topic(topic_text):
+        # On high-stakes topics, relevant government or academic evidence must
+        # not be crowded out merely because a weaker result came from the
+        # chapter-specific query.
+        strong_relevant = sorted(
+            (
+                source
+                for source in chapter_ranked + global_usable
+                if overlap(source) > 0
+                and grade_source(source)["tier"] in {"authoritative", "institutional"}
+            ),
+            key=score,
+            reverse=True,
+        )
+        strong_seen: set[str] = set()
+        for source in strong_relevant:
+            if source["url"] in strong_seen:
+                continue
+            strong_seen.add(source["url"])
+            picked.append(source)
+            if len(picked) >= limit:
+                return picked
+
+    picked.extend(
+        source
+        for source in chapter_ranked
+        if overlap(source) > 0 and source["url"] not in {item["url"] for item in picked}
+    )
+    picked = picked[:limit]
     seen = {source["url"] for source in picked}
     if len(picked) < limit:
         rest = sorted(
             (
                 source
-                for source in usable(global_candidates) + chapter_ranked
+                for source in global_usable + chapter_ranked
                 if source["url"] not in seen
             ),
             key=score,
@@ -364,13 +416,20 @@ def best_overlap_score(section: Dict[str, Any], sources: list[Dict[str, Any]]) -
     )
 
 
-def _source_context(sources: list[Dict[str, Any]], per_source_cap: int = 400) -> str:
+def _source_context(
+    sources: list[Dict[str, Any]],
+    section: Dict[str, Any] | None = None,
+) -> str:
     lines = []
     for index, source in enumerate(sources, start=1):
-        body = _clip(source.get("summary") or source.get("snippet") or "", per_source_cap)
-        lines.append(f"[{index}] {_clip(source.get('title'), 80)} - {source.get('url', '')}")
-        if body:
-            lines.append(f"    {body}")
+        grade = grade_source(source)
+        lines.append(
+            f"[{index}][trust={grade['tier']}] "
+            f"{_clip(source.get('title'), 80)} - {source.get('url', '')}"
+        )
+        passages = relevant_evidence_passages(section or {}, source)
+        for passage in passages:
+            lines.append(f"    [{index}.{passage['passage_id']}] {passage['text']}")
     return "\n".join(lines) or "- No sources available."
 
 
@@ -1270,9 +1329,21 @@ User improvement requests for this section (must be reflected):
         else section_title
     )
     if profile.get("citations_enabled", True):
+        high_stakes_rule = ""
+        if is_high_stakes_topic(f"{project.title} {section_title} {section.get('purpose', '')}"):
+            high_stakes_rule = (
+                "\n- This is a high-stakes topic. Prefer relevant sources labeled "
+                "trust=authoritative or trust=institutional. Treat trust=general, "
+                "trust=low, and trust=unknown as background only; qualify or omit "
+                "claims that lack stronger support."
+            )
         citation_rule = (
             "- When a source above supports a statement, cite it inline as [1] or [2] "
-            "matching the source numbers. Do not cite sources that are not listed."
+            "matching the source numbers. Do not cite sources that are not listed.\n"
+            "- For every factual claim carrying a citation, add an evidence ledger entry. "
+            "The evidence value must be a verbatim continuous excerpt from the chosen "
+            "passage, and passage_id must match labels such as P1 or P2."
+            f"{high_stakes_rule}"
         )
     else:
         citation_rule = (
@@ -1308,7 +1379,7 @@ Previous section summary JSON:
 {json.dumps(_clip_summary(previous_summary), ensure_ascii=False)}{digest_block}{glossary_block}{_style_card_block(style_card)}
 
 Relevant sources:
-{_source_context(sources)}{feedback_block}
+{_source_context(sources, section)}{feedback_block}
 
 Write only this section in Markdown, in the same language as the brief topic.
 {_type_block(profile, "section_guidance")}Rules:
@@ -1329,7 +1400,15 @@ Return this JSON shape:
     "terms": [],
     "open_threads": [],
     "next_section_handoff": ""
-  }}
+  }},
+  "evidence": [
+    {{
+      "claim": "The factual claim supported in the section",
+      "source_id": 1,
+      "passage_id": "P1",
+      "evidence": "Exact continuous excerpt copied from [1.P1]"
+    }}
+  ]
 }}
 Use the exact key name "markdown" for the section body. Do not rename it to
 "content", "body", or any other key. Do not return an empty markdown value.
@@ -1338,6 +1417,7 @@ Use the exact key name "markdown" for the section body. Do not rename it to
         ]
     )
 
+    parsed: Dict[str, Any] = {}
     try:
         parsed = _extract_json_object(content)
     except LLMError:
@@ -1357,8 +1437,286 @@ Use the exact key name "markdown" for the section body. Do not rename it to
             "terms": [],
             "open_threads": [],
             "next_section_handoff": f"Continue after {section.get('title', 'this section')}.",
+            "evidence": [],
         }
+    if isinstance(parsed, dict) and isinstance(parsed.get("evidence"), list):
+        summary["evidence"] = parsed["evidence"][:12]
+    elif not isinstance(summary.get("evidence"), list):
+        summary["evidence"] = []
     return markdown, summary, usage
+
+
+def repair_section_evidence(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    section: Dict[str, Any],
+    markdown: str,
+    sources: list[Dict[str, Any]],
+    validation: Dict[str, Any],
+) -> tuple[str, list[Dict[str, Any]], dict[str, Any] | None]:
+    """Repair one section whose citations failed deterministic verification.
+
+    This is deliberately a single bounded call. The caller validates the new
+    ledger again and keeps any remaining failure visible to the quality layer.
+    """
+    style = str(brief.get("style") or brief.get("tone") or "match the document")
+    content, usage = _chat_content(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You repair unsupported citations in one document section. "
+                    "Use only the supplied evidence passages. Return exactly one valid "
+                    "JSON object with markdown and evidence."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"""
+Project title:
+{project.title}
+
+Section JSON:
+{json.dumps(section, ensure_ascii=False)}
+
+Current Markdown:
+{markdown}
+
+Evidence validation failures:
+{json.dumps(validation, ensure_ascii=False)}
+
+Available sources and exact passages:
+{_source_context(sources, section)}
+
+Fix only claims affected by invalid or unverified citations.
+- Every remaining [n] citation must have at least one valid ledger entry.
+- Copy the evidence value exactly from the selected [n.Px] passage.
+- If no passage supports a factual claim, remove that claim. Do not merely
+  remove its citation while leaving the unsupported factual statement.
+- Do not introduce new facts, sources, headings, or sections.
+- Preserve the existing heading, language, register "{style}", and approximate length.
+
+Return this JSON shape:
+{{
+  "markdown": "",
+  "evidence": [
+    {{
+      "claim": "",
+      "source_id": 1,
+      "passage_id": "P1",
+      "evidence": "Exact continuous excerpt from the selected passage"
+    }}
+  ]
+}}
+""".strip(),
+            },
+        ]
+    )
+    parsed = _extract_json_object(content)
+    repaired_markdown = _markdown_from_parsed_response(
+        parsed, content, "Evidence repair"
+    )
+    evidence = parsed.get("evidence")
+    if not isinstance(evidence, list):
+        evidence = []
+    return repaired_markdown, [item for item in evidence[:12] if isinstance(item, dict)], usage
+
+
+_LOCAL_CITATION_ID_RE = re.compile(r"(?<!\[)\[(\d{1,2})\](?!\()")
+
+
+def _all_citation_counts(markdown: str) -> Counter[str]:
+    counts: Counter[str] = Counter(_LOCAL_CITATION_ID_RE.findall(markdown))
+    counts.update(f"linked:{marker}" for marker in citation_markers(markdown))
+    return counts
+
+
+def _first_heading_line(markdown: str) -> str:
+    return next(
+        (line.strip() for line in str(markdown or "").splitlines() if line.strip()),
+        "",
+    )
+
+
+def _repair_one_sentence_quality_section(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    draft: Dict[str, Any],
+    issues: list[Dict[str, Any]],
+) -> tuple[str, list[Dict[str, Any]], dict[str, Any] | None]:
+    section = draft.get("section") or {}
+    original = str(draft.get("markdown") or "")
+    sources = [source for source in (draft.get("sources") or []) if isinstance(source, dict)]
+    style = str(brief.get("style") or brief.get("tone") or "match the document")
+    content, usage = _chat_content(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You make a minimal quality repair to one document section. "
+                    "Fix only the supplied sentence-level issues and return one JSON object."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"""
+Project title:
+{project.title}
+
+Section JSON:
+{json.dumps(section, ensure_ascii=False)}
+
+Current Markdown:
+{original}
+
+Sentence-level issues to fix:
+{json.dumps(issues[:6], ensure_ascii=False)}
+
+Available sources and exact passages:
+{_source_context(sources, section)}
+
+Make the smallest edit that resolves the listed excerpts.
+- For duplicate content, remove or consolidate the repeated wording without
+  deleting unique information.
+- For a possible contradiction, make the statements consistent only when the
+  current section clearly supports that correction; otherwise qualify the claim.
+- For an unsupported absolute claim, replace the absolute wording with a
+  cautious statement supported by the available passages, or remove it.
+- Preserve the first heading exactly, including level, number, and title.
+- Preserve the same language, register "{style}", and approximate length.
+- Do not introduce new facts, sources, headings, citation numbers, or lists.
+- Preserve every existing citation marker and return an evidence ledger for
+  every remaining citation. Evidence must be copied verbatim from an [n.Px]
+  passage above. If there are no citations, return an empty evidence array.
+
+Return exactly this JSON shape:
+{{
+  "markdown": "",
+  "evidence": [
+    {{
+      "claim": "",
+      "source_id": 1,
+      "passage_id": "P1",
+      "evidence": "Exact continuous excerpt from the selected passage"
+    }}
+  ]
+}}
+""".strip(),
+            },
+        ]
+    )
+    parsed = _extract_json_object(content)
+    repaired = _markdown_from_parsed_response(parsed, content, "Sentence quality repair")
+    evidence = parsed.get("evidence")
+    if not isinstance(evidence, list):
+        raise LLMError("Sentence quality repair response missing evidence ledger")
+    if _first_heading_line(repaired) != _first_heading_line(original):
+        raise LLMError("Sentence quality repair changed the section heading")
+    if _all_citation_counts(repaired) != _all_citation_counts(original):
+        raise LLMError("Sentence quality repair changed citation markers")
+    if len(repaired) > len(original) * 1.6 + 300 or len(repaired) < len(original) * 0.45:
+        raise LLMError("Sentence quality repair changed section length too much")
+    return repaired, [item for item in evidence[:12] if isinstance(item, dict)], usage
+
+
+def repair_sentence_quality_sections(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    section_drafts: list[Dict[str, Any]],
+    quality: Dict[str, Any],
+    *,
+    high_stakes: bool = False,
+    limit: int = 3,
+) -> tuple[list[Dict[str, Any]], Dict[str, Any], dict[str, Any] | None]:
+    """Try one guarded repair call for each of a few flagged sections.
+
+    A candidate is accepted only if evidence validation succeeds and the
+    deterministic issue count decreases when the whole document is rechecked.
+    """
+    issues = [issue for issue in (quality.get("issues") or []) if isinstance(issue, dict)]
+    target_order: list[str] = []
+    issues_by_target: dict[str, list[Dict[str, Any]]] = {}
+    for issue in issues:
+        section_ids = [str(value) for value in (issue.get("section_ids") or []) if str(value)]
+        if not section_ids:
+            continue
+        target = section_ids[-1] if issue.get("type") in {"duplicate", "possible_contradiction"} else section_ids[0]
+        if target not in issues_by_target:
+            target_order.append(target)
+            issues_by_target[target] = []
+        issues_by_target[target].append(issue)
+    target_order = target_order[: max(int(limit), 0)]
+
+    working = list(section_drafts)
+    current_quality = quality
+    results: list[Dict[str, Any]] = []
+    usages: list[Dict[str, Any]] = []
+    for target in target_order:
+        current_target_issues = [
+            issue
+            for issue in (current_quality.get("issues") or [])
+            if target in [str(value) for value in (issue.get("section_ids") or [])]
+        ]
+        if not current_target_issues:
+            results.append(
+                {"section_id": target, "succeeded": False, "reason": "already_resolved"}
+            )
+            continue
+        draft_index = next(
+            (
+                index
+                for index, draft in enumerate(working)
+                if str((draft.get("section") or {}).get("id") or "") == target
+            ),
+            None,
+        )
+        if draft_index is None:
+            results.append({"section_id": target, "succeeded": False, "reason": "section_not_found"})
+            continue
+        draft = working[draft_index]
+        try:
+            markdown, evidence, usage = _repair_one_sentence_quality_section(
+                project, brief, draft, current_target_issues
+            )
+            if usage is not None:
+                usages.append({"section_id": target, **usage})
+            validation = validate_evidence_ledger(
+                markdown=markdown,
+                evidence=evidence,
+                sources=[source for source in (draft.get("sources") or []) if isinstance(source, dict)],
+                section=draft.get("section") or {},
+            )
+            if validation.get("status") != "valid":
+                raise LLMError("Sentence quality repair produced unverified evidence")
+            candidate_draft = {
+                **draft,
+                "markdown": markdown,
+                "evidence": evidence,
+                "evidence_validation": validation,
+                "sentence_quality_repair": {"attempted": True, "succeeded": True},
+            }
+            candidate = list(working)
+            candidate[draft_index] = candidate_draft
+            candidate_quality = sentence_quality_stats(candidate, high_stakes=high_stakes)
+            if candidate_quality["issue_count"] >= current_quality["issue_count"]:
+                raise LLMError("Sentence quality repair did not reduce deterministic issues")
+        except LLMError as exc:
+            results.append({"section_id": target, "succeeded": False, "reason": str(exc)})
+            continue
+        working = candidate
+        current_quality = candidate_quality
+        results.append({"section_id": target, "succeeded": True, "reason": None})
+
+    report = {
+        "attempted": bool(target_order),
+        "initial_issue_count": int(quality.get("issue_count") or 0),
+        "final_issue_count": int(current_quality.get("issue_count") or 0),
+        "attempted_section_count": len(target_order),
+        "repaired_section_count": sum(1 for result in results if result["succeeded"]),
+        "results": results,
+        "remaining_issues": (current_quality.get("issues") or [])[:12],
+    }
+    return working, report, ({"section_calls": usages} if usages else None)
 
 
 def summarize_section(
@@ -1774,9 +2132,21 @@ def review_continuity_staged(
                 notes.append(f"[cross-chapter] {review['notes']}")
 
     if attempted and not succeeded:
-        raise LLMError("Continuity review failed for every chapter")
+        return {
+            "verdict": "incomplete",
+            "issues": [],
+            "revision_targets": [],
+            "notes": " ".join(notes) or "Continuity review did not complete.",
+            "chapter_review_count": 0,
+        }, None
 
+    # Small models sometimes describe concrete problems but still emit
+    # verdict=pass and an empty target list.  Recover targets from structured
+    # issues and let the deterministic contract win over contradictory fields.
+    targets.extend(issue_section_ids(issues))
     deduped_targets = list(dict.fromkeys(targets))
+    if issues:
+        verdict = "needs_revision"
     return {
         "verdict": verdict,
         "issues": issues,
@@ -1872,6 +2242,7 @@ def review_rubric_staged(
     targets: list[str] = []
     notes: list[str] = []
     usages: list[Dict[str, Any]] = []
+    succeeded = 0
 
     for chapter_id, drafts in by_chapter.items():
         sections_block = "\n\n".join(
@@ -1887,6 +2258,7 @@ def review_rubric_staged(
         except LLMError:
             notes.append(f"Chapter {chapter_id} rubric review failed; skipped.")
             continue
+        succeeded += 1
         if usage is not None:
             usages.append({"chapter_id": chapter_id, **usage})
         for entry in review.get("scores") or []:
@@ -1923,9 +2295,20 @@ def review_rubric_staged(
         for item in rubric
         for scores in [score_lists[item["key"]]]
     ]
+    targets.extend(issue_section_ids(issues))
     deduped_targets = list(dict.fromkeys(targets))[:5]
+    low_score = any(
+        isinstance(item.get("min_score"), int) and item["min_score"] <= 3
+        for item in criteria
+    )
+    if by_chapter and not succeeded:
+        verdict = "incomplete"
+    elif issues or deduped_targets or low_score:
+        verdict = "needs_revision"
+    else:
+        verdict = "pass"
     return {
-        "verdict": "needs_revision" if deduped_targets else "pass",
+        "verdict": verdict,
         "criteria": criteria,
         "issues": issues,
         "revision_targets": deduped_targets,
@@ -2070,7 +2453,22 @@ def revise_targeted_sections(
             markdown, usage = _revise_one_section(project, brief, draft, issues)
         except LLMError:
             continue
-        revised.append({"section": section, "markdown": markdown})
+        revised.append(
+            {
+                **draft,
+                "section": section,
+                "markdown": markdown,
+                "evidence_validation": {
+                    "status": "stale",
+                    "reason": "section_revised_after_evidence_capture",
+                },
+                "evidence_repair": {
+                    "attempted": False,
+                    "succeeded": False,
+                    "reason": "section_revised_after_evidence_capture",
+                },
+            }
+        )
         if usage is not None:
             usages.append({"section_id": section.get("id"), **usage})
 

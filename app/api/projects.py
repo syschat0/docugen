@@ -8,18 +8,24 @@ from app.db.repositories import (
     add_project_references,
     create_project,
     delete_project,
+    delete_quality_issue_decision,
     delete_project_reference,
     get_project,
+    get_project_quality_summary,
     get_project_settings,
     list_project_references,
     list_projects,
     mark_project_inputs_changed,
+    set_quality_issue_decision,
     set_project_settings,
+    UnknownQualityIssueError,
     update_project,
 )
 from app.schemas.projects import (
     ProjectCreate,
     ProjectRead,
+    ProjectQualityRead,
+    QualityIssueDecisionUpsert,
     ProjectReferenceRead,
     ProjectSettingsRead,
     ProjectSettingsUpdate,
@@ -55,6 +61,43 @@ def get_project_endpoint(project_id: str) -> ProjectRead:
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+
+@router.get("/{project_id}/quality", response_model=ProjectQualityRead)
+def get_project_quality_endpoint(project_id: str) -> ProjectQualityRead:
+    summary = get_project_quality_summary(project_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectQualityRead(**summary)
+
+
+@router.put(
+    "/{project_id}/quality/issues/{issue_key}", response_model=ProjectQualityRead
+)
+def set_quality_issue_decision_endpoint(
+    project_id: str, issue_key: str, payload: QualityIssueDecisionUpsert
+) -> ProjectQualityRead:
+    try:
+        summary = set_quality_issue_decision(
+            project_id, issue_key, payload.decision, payload.reason
+        )
+    except UnknownQualityIssueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectQualityRead(**summary)
+
+
+@router.delete(
+    "/{project_id}/quality/issues/{issue_key}", response_model=ProjectQualityRead
+)
+def delete_quality_issue_decision_endpoint(
+    project_id: str, issue_key: str
+) -> ProjectQualityRead:
+    summary = delete_quality_issue_decision(project_id, issue_key)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectQualityRead(**summary)
 
 
 @router.patch("/{project_id}", response_model=ProjectRead)

@@ -32,7 +32,12 @@ def wait_for_run(base_url: str, project_id: str, timeout: float = 30.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         status, progress = request(base_url, "GET", f"/projects/{project_id}/progress")
-        if progress["status"] in {"completed", "failed", "waiting_for_user"}:
+        if progress["status"] in {
+            "completed",
+            "review_needed",
+            "failed",
+            "waiting_for_user",
+        }:
             return status, progress
         time.sleep(0.5)
     raise RuntimeError("workflow run did not finish in time")
@@ -197,13 +202,13 @@ def main() -> int:
                 raise RuntimeError("artifact create failed")
             if run_status != 200 or run_result["status"] != "started":
                 raise RuntimeError("workflow run failed")
-            if progress["status"] != "completed":
+            if progress["status"] not in {"completed", "review_needed"}:
                 raise RuntimeError("workflow status update failed")
             if progress_status != 200 or progress["percent"] != 100:
                 raise RuntimeError("workflow progress failed")
             if rerun_status != 200 or rerun_result["status"] != "started":
                 raise RuntimeError("workflow rerun failed")
-            if rerun_progress["status"] != "completed":
+            if rerun_progress["status"] not in {"completed", "review_needed"}:
                 raise RuntimeError("workflow rerun completion failed")
             if export_status != 200 or not export_result["file_path"].endswith("final.md"):
                 raise RuntimeError("markdown export failed")

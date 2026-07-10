@@ -9,6 +9,12 @@ from app.core.config import settings
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
 from app.services.page_meta import extract_page_meta
+from app.services.quality import (
+    authoritative_search_queries,
+    grade_source,
+    is_high_stakes_topic,
+    summarize_source_quality,
+)
 
 # Citation metadata fields copied from fetched pages onto source dicts.
 _PAGE_META_FIELDS = ("author", "published_year", "site_name")
@@ -200,6 +206,29 @@ def _search_browser(queries: list[str]) -> tuple[list[dict[str, str]], list[str]
     return search_with_browser(queries, settings.search_max_results)
 
 
+def _rank_and_dedupe_results(
+    results: list[dict[str, str]], limit: int
+) -> list[dict[str, str]]:
+    """Keep unique URLs and let source trust break otherwise equal ordering."""
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for result in results:
+        url = str(result.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        deduped.append(result)
+    return sorted(
+        deduped,
+        key=lambda result: int(grade_source(result)["score"]),
+        reverse=True,
+    )[:limit]
+
+
+def _project_topic_text(project: ProjectRead) -> str:
+    return f"{project.title} {project.initial_request}".strip()
+
+
 def search_web(project: ProjectRead, decisions: list[UserDecisionRead]) -> dict[str, Any]:
     # Lazy import avoids a circular import (repositories imports this module).
     from app.db.repositories import effective_search_enabled
@@ -235,6 +264,44 @@ def search_web(project: ProjectRead, decisions: list[UserDecisionRead]) -> dict[
         else:
             errors.extend(http_errors)
 
+    quality_topup: dict[str, Any] = {
+        "attempted": False,
+        "queries": [],
+        "results_added": 0,
+        "strong_source_count": summarize_source_quality(results)["strong_source_count"],
+        "error": None,
+    }
+    topic_text = _project_topic_text(project)
+    if is_high_stakes_topic(topic_text) and not quality_topup["strong_source_count"]:
+        topup_queries = authoritative_search_queries(queries[0] if queries else project.title, topic_text)
+        quality_topup["attempted"] = bool(topup_queries)
+        quality_topup["queries"] = topup_queries
+        topup_results: list[dict[str, str]] = []
+        topup_errors: list[str] = []
+        if topup_queries and used_backend == "browser":
+            try:
+                topup_results, topup_errors = _search_browser(topup_queries)
+            except Exception as exc:
+                topup_errors.append(f"browser authority search unavailable: {exc}")
+        if topup_queries and not topup_results and backend != "browser":
+            topup_results, http_errors = _search_http(topup_queries)
+            topup_errors.extend(http_errors)
+        before_urls = {str(result.get("url") or "") for result in results}
+        results = _rank_and_dedupe_results(
+            results + topup_results, settings.search_max_results
+        )
+        after_urls = {str(result.get("url") or "") for result in results}
+        quality_topup["results_added"] = len(after_urls - before_urls)
+        quality_topup["strong_source_count"] = summarize_source_quality(results)[
+            "strong_source_count"
+        ]
+        if topup_errors and not topup_results:
+            quality_topup["error"] = "; ".join(topup_errors)
+            if not results:
+                errors.extend(topup_errors)
+    else:
+        results = _rank_and_dedupe_results(results, settings.search_max_results)
+
     return {
         "enabled": True,
         "query": " | ".join(queries),
@@ -242,6 +309,7 @@ def search_web(project: ProjectRead, decisions: list[UserDecisionRead]) -> dict[
         "query_source": query_source,
         "backend": used_backend,
         "results": results,
+        "quality_topup": quality_topup,
         "error": "; ".join(errors) if errors and not results else None,
     }
 
@@ -398,7 +466,7 @@ def _plan_section_query(section: dict[str, Any]) -> str:
 
 
 def search_section_sources(
-    section: dict[str, Any], limit: int
+    section: dict[str, Any], limit: int, project_text: str = ""
 ) -> tuple[list[dict[str, Any]], str | None, str]:
     """Top-up search for one section whose planned sources are irrelevant.
 
@@ -429,13 +497,48 @@ def search_section_sources(
         results = http_results[:limit]
         error = error or http_error
 
+    topic_text = " ".join(
+        [project_text, str(section.get("title") or ""), str(section.get("purpose") or "")]
+        + [str(point) for point in (section.get("key_points") or [])]
+    )
+    quality_queries: list[str] = []
+    if (
+        is_high_stakes_topic(topic_text)
+        and summarize_source_quality(results)["strong_source_count"] == 0
+    ):
+        quality_queries = authoritative_search_queries(query, topic_text, limit=1)
+        authority_results: list[dict[str, str]] = []
+        authority_error: str | None = None
+        if quality_queries and settings.search_backend in {"auto", "browser"}:
+            try:
+                from app.services.browser_search import search_grouped
+
+                authority_groups = search_grouped(quality_queries, limit)
+                if authority_groups:
+                    authority_results = authority_groups[0].get("results") or []
+                    authority_error = authority_groups[0].get("error")
+            except Exception as exc:
+                authority_error = f"browser authority search unavailable: {exc}"
+        if quality_queries and not authority_results and settings.search_backend != "browser":
+            authority_results, authority_error = _search_once(quality_queries[0])
+        for result in authority_results:
+            result = dict(result)
+            result["_quality_query"] = quality_queries[0]
+            results.append(result)
+        results = _rank_and_dedupe_results(results, limit)
+        error = error or authority_error
+    else:
+        results = _rank_and_dedupe_results(results, limit)
+
     sources = [
         {
             "title": result.get("title", ""),
             "url": result.get("url", ""),
             "snippet": result.get("snippet", ""),
             "summary": result.get("snippet", ""),
-            "query": query,
+            "query": result.get("_quality_query") or query,
+            "quality_topup": bool(result.get("_quality_query")),
+            "trust_tier": grade_source(result)["tier"],
         }
         for result in results
         if result.get("url")

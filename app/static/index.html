@@ -15,7 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Jua&family=Luckiest+Guy&family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&family=Noto+Serif+KR:wght@400;700;900&display=swap"
     />
     <link rel="stylesheet" href="/ui/vendor/katex/katex.min.css" />
-    <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260711-quality10" />
     <script>
       document.documentElement.dataset.theme =
         localStorage.getItem("docugenTheme") || "pastel";
@@ -298,6 +298,23 @@
               <div id="stepDetail" class="step-detail hidden" aria-live="polite"></div>
             </details>
 
+            <section id="qualityPanel" class="quality-panel hidden" aria-label="Document quality summary">
+              <div class="section-head">
+                <h3 data-i18n="qualitySummary">Quality Summary</h3>
+                <span id="qualityStatus" class="quality-status"></span>
+              </div>
+              <div class="quality-metrics">
+                <div><strong id="qualityStrongSources">0</strong><span data-i18n="strongSources">Strong sources</span></div>
+                <div><strong id="qualityLowSources">0</strong><span data-i18n="lowQualitySources">Low-quality sources</span></div>
+                <div><strong id="qualityCitationCoverage">-</strong><span data-i18n="citedParagraphs">Cited paragraphs</span></div>
+                <div><strong id="qualityEvidenceCoverage">-</strong><span data-i18n="verifiedEvidence">Verified citations</span></div>
+                <div><strong id="qualityIssueCount">0</strong><span data-i18n="reviewIssues">Review findings</span></div>
+                <div><strong id="qualityWritingIssueCount">0</strong><span data-i18n="writingIssues">Writing flags</span></div>
+                <div><strong id="qualityStructureIssueCount">0</strong><span data-i18n="structureIssues">Readability flags</span></div>
+              </div>
+              <ul id="qualityWarnings" class="quality-warnings"></ul>
+            </section>
+
             <section class="draft-panel" aria-label="Draft preview">
               <div class="section-head">
                 <h3 data-i18n="draftPreview">Draft Preview</h3>
@@ -443,6 +460,6 @@
     <script src="/ui/vendor/mermaid.min.js"></script>
     <script src="/ui/vendor/katex/katex.min.js"></script>
     <script src="/ui/markdown.js"></script>
-    <script src="/ui/app.js"></script>
+    <script src="/ui/app.js?v=20260711-quality12"></script>
   </body>
 </html>

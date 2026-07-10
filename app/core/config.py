@@ -23,6 +23,15 @@ class Settings:
     llm_model: str = os.getenv("LLM_MODEL", "qwen/qwen3.6-35b-a3b")
     llm_timeout_seconds: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
     llm_merge_enabled: bool = _bool_env("LLM_MERGE_ENABLED", "false")
+    # One bounded cleanup call per flagged section after reviewer revisions.
+    # Each candidate is accepted only when deterministic issue counts decrease
+    # and headings, citations, and evidence validation remain intact.
+    sentence_quality_repair_enabled: bool = _bool_env(
+        "SENTENCE_QUALITY_REPAIR_ENABLED", "true"
+    )
+    sentence_quality_repair_limit: int = int(
+        os.getenv("SENTENCE_QUALITY_REPAIR_LIMIT", "3")
+    )
     # Pause after outline review and wait for the user to approve the outline
     # before the expensive section-writing phase.
     require_outline_approval: bool = _bool_env("REQUIRE_OUTLINE_APPROVAL", "false")

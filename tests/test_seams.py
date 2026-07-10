@@ -185,17 +185,15 @@ class TestReviewContinuityStaged:
         assert review["verdict"] == "pass"
         assert "Chapter 1" in review["notes"]
 
-    def test_total_failure_raises(self, monkeypatch):
+    def test_total_failure_returns_incomplete(self, monkeypatch):
         def boom(*args):
             raise LLMError("down")
 
         monkeypatch.setattr(llm, "_review_chapter_continuity", boom)
         monkeypatch.setattr(llm, "_review_cross_chapter_continuity", boom)
-        try:
-            llm.review_continuity_staged(
-                make_project(), BRIEF, self.DRAFTS, self.SUMMARIES, self.DIGESTS
-            )
-        except LLMError:
-            pass
-        else:
-            raise AssertionError("expected LLMError")
+        review, usage = llm.review_continuity_staged(
+            make_project(), BRIEF, self.DRAFTS, self.SUMMARIES, self.DIGESTS
+        )
+        assert review["verdict"] == "incomplete"
+        assert review["chapter_review_count"] == 0
+        assert usage is None
