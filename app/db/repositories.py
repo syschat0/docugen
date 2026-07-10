@@ -2646,75 +2646,39 @@ def _prepare_generation_run(
     )
 
 
-def run_document_generation(
-    project_id: str, force_from: str | None = None
-) -> Optional[WorkflowRunRead]:
-    """Install the project's effective search options for the whole run, then
-    delegate. The options reach the browser/LLM search helpers via a context
-    variable, so the reset must wrap every exit path."""
-    token = use_search_options(effective_search_options(project_id))
-    try:
-        return _run_document_generation(project_id, force_from)
-    finally:
-        reset_search_options(token)
+def _fail_pipeline_stage(
+    project_id: str, run_id: str, phase: str, exc: Exception
+) -> None:
+    failed_at = utc_now_iso()
+    _fail_agent_run(run_id, str(exc))
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE projects
+            SET status = ?, current_phase = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            ("failed", phase, failed_at, project_id),
+        )
 
 
-def _run_document_generation(
-    project_id: str, force_from: str | None = None
-) -> Optional[WorkflowRunRead]:
-    project = get_project(project_id)
-    if project is None:
-        return None
-
-    # Drop any stale control state from a previous aborted attempt so this run
-    # is not cancelled before it starts.
-    clear_cancel(project_id)
-    clear_stage_progress(project_id)
-
-    if force_from:
-        _invalidate_from_phase(project_id, force_from)
-        project = get_project(project_id)
-        if project is None:
-            return None
-    else:
-        _reset_agent_runs(project_id)
-
-    waiting_result = _waiting_for_user_result(project_id)
-    if waiting_result is not None:
-        return waiting_result
-
-    prepared = _prepare_generation_run(project_id, project)
+def _run_intake_stage(
+    project_id: str,
+    prepared: PreparedRunContext,
+    *,
+    force_intake: bool,
+) -> WorkflowRunRead | None:
+    """Plan missing intake questions and pause the workflow when needed."""
     project = prepared.project
-    profile = prepared.profile
-    agent_name = prepared.agent_name
-    classified_type = prepared.classified_type
-    classify_usage = prepared.classify_usage
     decisions = prepared.decisions
-    feedback_decisions = prepared.feedback_decisions
-    input_cutoff = prepared.input_cutoff
-    artifact_ids: list[str] = []
-
-    def fail(run_id: str, phase: str, exc: Exception) -> None:
-        failed_at = utc_now_iso()
-        _fail_agent_run(run_id, str(exc))
-        with get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE projects
-                SET status = ?, current_phase = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                ("failed", phase, failed_at, project_id),
-            )
 
     # A forced intake rerun re-plans questions even when answers exist: the
     # planner sees the saved decisions, so it only asks what is still missing
     # (or nothing, letting the run continue into drafting).
-    force_intake = force_from == "intake"
     if settings.llm_enabled and (not decisions or force_intake):
         run_id = _start_agent_run(
             project_id,
-            agent_name,
+            prepared.agent_name,
             "intake",
             {
                 "title": project.title,
@@ -2725,15 +2689,15 @@ def _run_document_generation(
         )
         try:
             planned_questions, question_usage = plan_user_questions(
-                project, decisions, profile=profile
+                project, decisions, profile=prepared.profile
             )
         except LLMError as exc:
-            fail(run_id, "intake", exc)
+            _fail_pipeline_stage(project_id, run_id, "intake", exc)
             raise WorkflowRunFailedError(str(exc)) from exc
-        if classify_usage is not None:
+        if prepared.classify_usage is not None:
             question_usage = {
                 "questions": question_usage,
-                "classification": classify_usage,
+                "classification": prepared.classify_usage,
             }
 
         if planned_questions:
@@ -2794,24 +2758,83 @@ def _run_document_generation(
             status="completed",
             token_usage=question_usage,
         )
+        return None
+
+    run_id = _start_agent_run(
+        project_id,
+        prepared.agent_name,
+        "intake",
+        {
+            "decision_count": len(decisions),
+            "llm_enabled": settings.llm_enabled,
+            "document_type": project.document_type,
+        },
+    )
+    _complete_agent_run(
+        run_id,
+        {"skipped_question_planning": True},
+        token_usage=(
+            {"classification": prepared.classify_usage}
+            if prepared.classify_usage
+            else None
+        ),
+    )
+    return None
+
+
+def run_document_generation(
+    project_id: str, force_from: str | None = None
+) -> Optional[WorkflowRunRead]:
+    """Install the project's effective search options for the whole run, then
+    delegate. The options reach the browser/LLM search helpers via a context
+    variable, so the reset must wrap every exit path."""
+    token = use_search_options(effective_search_options(project_id))
+    try:
+        return _run_document_generation(project_id, force_from)
+    finally:
+        reset_search_options(token)
+
+
+def _run_document_generation(
+    project_id: str, force_from: str | None = None
+) -> Optional[WorkflowRunRead]:
+    project = get_project(project_id)
+    if project is None:
+        return None
+
+    # Drop any stale control state from a previous aborted attempt so this run
+    # is not cancelled before it starts.
+    clear_cancel(project_id)
+    clear_stage_progress(project_id)
+
+    if force_from:
+        _invalidate_from_phase(project_id, force_from)
+        project = get_project(project_id)
+        if project is None:
+            return None
     else:
-        run_id = _start_agent_run(
-            project_id,
-            agent_name,
-            "intake",
-            {
-                "decision_count": len(decisions),
-                "llm_enabled": settings.llm_enabled,
-                "document_type": project.document_type,
-            },
-        )
-        _complete_agent_run(
-            run_id,
-            {"skipped_question_planning": True},
-            token_usage=(
-                {"classification": classify_usage} if classify_usage else None
-            ),
-        )
+        _reset_agent_runs(project_id)
+
+    waiting_result = _waiting_for_user_result(project_id)
+    if waiting_result is not None:
+        return waiting_result
+
+    prepared = _prepare_generation_run(project_id, project)
+    project = prepared.project
+    profile = prepared.profile
+    agent_name = prepared.agent_name
+    decisions = prepared.decisions
+    feedback_decisions = prepared.feedback_decisions
+    input_cutoff = prepared.input_cutoff
+    artifact_ids: list[str] = []
+
+    intake_result = _run_intake_stage(
+        project_id,
+        prepared,
+        force_intake=force_from == "intake",
+    )
+    if intake_result is not None:
+        return intake_result
 
     try:
         # Style card: distill the user's writing samples into a voice guide.
@@ -4177,7 +4200,13 @@ def _run_document_generation(
                 (final_status, "final_merge", completed_at, project_id),
             )
     except LLMError as exc:
-        fail(run_id, get_project(project_id).current_phase if get_project(project_id) else "unknown", exc)
+        current_project = get_project(project_id)
+        _fail_pipeline_stage(
+            project_id,
+            run_id,
+            current_project.current_phase if current_project else "unknown",
+            exc,
+        )
         raise WorkflowRunFailedError(str(exc)) from exc
 
     updated_project = get_project(project_id)
