@@ -100,77 +100,59 @@ class WorkflowCancelledError(Exception):
 class PipelineStageSpec:
     key: str
     label: str
-    invalidates: tuple[str, ...] = ()
-    clears_summaries: bool = False
+    primary: tuple[str, ...] = ()
 
 
 PIPELINE_STAGES: tuple[PipelineStageSpec, ...] = (
-    PipelineStageSpec(
-        "intake",
-        "Intake questions",
-        ("research_sources", "source_summaries", "brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-        True,
-    ),
-    PipelineStageSpec(
-        "style_card", "Style card", ("style_card", "section_draft", "draft")
-    ),
-    PipelineStageSpec(
-        "research",
-        "Web research",
-        ("research_sources", "source_summaries", "brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-    ),
-    PipelineStageSpec(
-        "source_summary",
-        "Source summaries",
-        ("source_summaries", "brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-    ),
-    PipelineStageSpec(
-        "brief",
-        "Brief",
-        ("brief", "outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-    ),
-    PipelineStageSpec(
-        "outline",
-        "Outline",
-        ("outline", "outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-    ),
-    PipelineStageSpec(
-        "outline_review",
-        "Outline review",
-        ("outline_review", "section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-    ),
-    PipelineStageSpec(
-        "section_plan",
-        "Section plan",
-        ("section_plan", "section_plan_review", "chapter_sources", "section_draft", "draft"),
-        True,
-    ),
-    PipelineStageSpec(
-        "section_plan_review",
-        "Section plan review",
-        ("section_plan_review", "chapter_sources", "section_draft", "draft"),
-        True,
-    ),
-    PipelineStageSpec(
-        "chapter_research",
-        "Chapter research",
-        ("chapter_sources", "section_draft", "draft"),
-    ),
-    PipelineStageSpec(
-        "section_writing", "Section writing", ("section_draft", "draft"), True
-    ),
-    PipelineStageSpec("section_summary", "Section summaries", ("draft",), True),
+    PipelineStageSpec("intake", "Intake questions"),
+    PipelineStageSpec("style_card", "Style card", ("style_card",)),
+    PipelineStageSpec("research", "Web research", ("research_sources",)),
+    PipelineStageSpec("source_summary", "Source summaries", ("source_summaries",)),
+    PipelineStageSpec("brief", "Brief", ("brief",)),
+    PipelineStageSpec("outline", "Outline", ("outline",)),
+    PipelineStageSpec("outline_review", "Outline review", ("outline_review",)),
+    PipelineStageSpec("section_plan", "Section plan", ("section_plan",)),
+    PipelineStageSpec("section_plan_review", "Section plan review", ("section_plan_review",)),
+    PipelineStageSpec("chapter_research", "Chapter research", ("chapter_sources",)),
+    PipelineStageSpec("section_writing", "Section writing", ("section_draft",)),
+    PipelineStageSpec("section_summary", "Section summaries"),
     PipelineStageSpec("feedback_revision", "Feedback revision"),
-    PipelineStageSpec("continuity_review", "Continuity review", ("draft",), True),
-    PipelineStageSpec("rubric_review", "Rubric review", ("rubric_review", "targeted_revision", "draft")),
-    PipelineStageSpec("targeted_revision", "Targeted revision", ("draft",), True),
-    PipelineStageSpec("final_merge", "Final merge", ("draft",), True),
+    PipelineStageSpec("continuity_review", "Continuity review", ("continuity_review",)),
+    PipelineStageSpec("rubric_review", "Rubric review", ("rubric_review",)),
+    PipelineStageSpec("targeted_revision", "Targeted revision", ("targeted_revision",)),
+    PipelineStageSpec("final_merge", "Final merge", ("draft",)),
 )
 
 WORKFLOW_STEPS: list[tuple[str, str]] = [
     (stage.key, stage.label) for stage in PIPELINE_STAGES
 ]
 _PIPELINE_STAGE_BY_KEY = {stage.key: stage for stage in PIPELINE_STAGES}
+
+
+# style_card hangs off the reference inputs, not the main chain: forcing it
+# must not clear research artifacts, and forcing intake must not clear it.
+_MAIN_CHAIN_KEYS = [s.key for s in PIPELINE_STAGES if s.key != "style_card"]
+
+
+def _stage_invalidates(key: str) -> tuple[str, ...]:
+    if key == "style_card":
+        tail = _MAIN_CHAIN_KEYS[_MAIN_CHAIN_KEYS.index("section_writing"):]
+        types = ["style_card"]
+    elif key in _MAIN_CHAIN_KEYS:
+        tail = _MAIN_CHAIN_KEYS[_MAIN_CHAIN_KEYS.index(key):]
+        types = []
+    else:
+        return ()
+    for stage_key in tail:
+        types.extend(_PIPELINE_STAGE_BY_KEY[stage_key].primary)
+    return tuple(dict.fromkeys(types))
+
+
+def _stage_clears_summaries(key: str) -> bool:
+    # Summaries are written during section writing, so they go whenever the
+    # drafts they describe are invalidated. Forcing section_summary is the
+    # explicit way to regenerate them (via a full rewrite).
+    return key == "section_summary" or "section_draft" in _stage_invalidates(key)
 
 
 def utc_now_iso() -> str:
@@ -1391,7 +1373,9 @@ def _invalidate_from_phase(project_id: str, phase: str) -> None:
     # clears intermediate artifacts and then writes a new draft version, so the
     # old one stays browsable in the version list.
     artifact_types = [
-        artifact_type for artifact_type in stage.invalidates if artifact_type != "draft"
+        artifact_type
+        for artifact_type in _stage_invalidates(phase)
+        if artifact_type != "draft"
     ]
 
     run_phases = [item[0] for item in WORKFLOW_STEPS]
@@ -1410,7 +1394,7 @@ def _invalidate_from_phase(project_id: str, phase: str) -> None:
                 "DELETE FROM pending_questions WHERE project_id = ? AND status = ?",
                 (project_id, "pending"),
             )
-        if stage.clears_summaries:
+        if _stage_clears_summaries(phase):
             conn.execute("DELETE FROM summaries WHERE project_id = ?", (project_id,))
         run_placeholders = ",".join("?" for _ in run_phases)
         conn.execute(
@@ -4141,6 +4125,53 @@ def _run_new_section_writing_stage(
     )
 
 
+def _persist_revised_section_draft(
+    project_id: str,
+    draft: Dict[str, Any],
+    markdown: str,
+    title: str,
+    agent_name: str,
+) -> str:
+    """Persist a revised section as a new section_draft version.
+
+    Re-validates the evidence ledger against the revised markdown so a
+    revision does not permanently downgrade evidence status to "stale"."""
+    section = draft.get("section") or {}
+    sources = draft.get("sources") or []
+    evidence = draft.get("evidence") or []
+    evidence_validation = validate_evidence_ledger(
+        markdown=markdown,
+        evidence=evidence,
+        sources=sources,
+        section=section,
+    )
+    evidence_repair = {
+        "attempted": False,
+        "succeeded": False,
+        "reason": "revalidated_after_revision",
+    }
+    draft_content = {
+        "section": section,
+        "markdown": markdown,
+        "sources": sources,
+        "evidence": evidence,
+        "evidence_validation": evidence_validation,
+        "evidence_repair": evidence_repair,
+    }
+    with get_connection() as conn:
+        artifact_id = _insert_artifact(
+            conn, project_id, "section_draft", title, draft_content,
+            utc_now_iso(), agent_name,
+        )
+    artifact = get_artifact(project_id, artifact_id)
+    draft["markdown"] = markdown
+    draft["evidence_validation"] = evidence_validation
+    draft["evidence_repair"] = evidence_repair
+    draft["artifact_id"] = artifact_id
+    draft["updated_at"] = artifact.updated_at if artifact else utc_now_iso()
+    return artifact_id
+
+
 def _run_feedback_revision_stage(
     project_id: str,
     project: ProjectRead,
@@ -4201,40 +4232,14 @@ def _run_feedback_revision_stage(
                 section,
                 numbered=profile.get("numbered_headings", True),
             )
-            draft_content = {
-                "section": section,
-                "markdown": markdown,
-                "sources": draft.get("sources") or [],
-                "evidence": draft.get("evidence") or [],
-                "evidence_validation": {
-                    "status": "stale",
-                    "reason": "section_revised_after_evidence_capture",
-                },
-                "evidence_repair": {
-                    "attempted": False,
-                    "succeeded": False,
-                    "reason": "section_revised_after_evidence_capture",
-                },
-            }
-            with get_connection() as conn:
-                artifact_id = _insert_artifact(
-                    conn,
-                    project_id,
-                    "section_draft",
-                    f"Section {section_id}: feedback applied",
-                    draft_content,
-                    utc_now_iso(),
-                    agent_name,
-                )
-            artifact_ids.append(artifact_id)
-            revised_artifact = get_artifact(project_id, artifact_id)
-            draft["markdown"] = markdown
-            draft["evidence_validation"] = draft_content["evidence_validation"]
-            draft["evidence_repair"] = draft_content["evidence_repair"]
-            draft["artifact_id"] = artifact_id
-            draft["updated_at"] = (
-                revised_artifact.updated_at if revised_artifact else utc_now_iso()
+            artifact_id = _persist_revised_section_draft(
+                project_id,
+                draft,
+                markdown,
+                f"Section {section_id}: feedback applied",
+                agent_name,
             )
+            artifact_ids.append(artifact_id)
             applied_sections.append(section_id)
             if usage is not None:
                 feedback_usage.append({"section_id": section_id, **usage})
@@ -4429,11 +4434,10 @@ def _run_targeted_revision_stage(
         revision_artifact.updated_at, rubric_time
     ):
         revision = revision_artifact.content or {}
-        revised_sections = revision.get("sections")
-        if isinstance(revised_sections, list) and revised_sections:
-            section_drafts = apply_section_revisions(
-                section_drafts, revised_sections
-            )
+        legacy_sections = revision.get("sections")
+        if isinstance(legacy_sections, list) and legacy_sections:
+            # Pre-persistence artifacts carry revisions only here; keep applying them.
+            section_drafts = apply_section_revisions(section_drafts, legacy_sections)
         _complete_reuse_run(
             project_id,
             agent_name,
@@ -4504,14 +4508,35 @@ def _run_targeted_revision_stage(
         _fail_pipeline_stage(project_id, run_id, "targeted_revision", exc)
         raise WorkflowRunFailedError(str(exc)) from exc
 
+    # Persist each actually-revised section as a new section_draft version so
+    # downstream reviews evaluate the revised text (and re-validate evidence)
+    # instead of relying on runtime re-application from this artifact.
+    revised_ids: list[str] = []
+    persisted_artifact_ids: list[str] = []
+    final_sections: list[Dict[str, Any]] = []
+    for original, merged in zip(section_drafts, merged_sections):
+        if merged is original or merged.get("markdown") == original.get("markdown"):
+            final_sections.append(original)
+            continue
+        updated = dict(merged)
+        section_id = str((updated.get("section") or {}).get("id", ""))
+        persisted_artifact_ids.append(
+            _persist_revised_section_draft(
+                project_id, updated, str(updated.get("markdown") or ""),
+                f"Section {section_id}: targeted revision", agent_name,
+            )
+        )
+        revised_ids.append(section_id)
+        final_sections.append(updated)
+
     revision = {
-        "sections": merged_sections,
-        "changed": merged_sections != section_drafts,
+        "changed": bool(revised_ids),
+        "revised_section_ids": revised_ids,
         "continuity_verdict": continuity.get("verdict"),
         "rubric_verdict": rubric_review.get("verdict"),
         "sentence_quality_repair": sentence_repair_report,
     }
-    section_drafts = merged_sections
+    section_drafts = final_sections
     with get_connection() as conn:
         artifact_id = _insert_artifact(
             conn,
@@ -4531,6 +4556,7 @@ def _run_targeted_revision_stage(
         {
             "artifact_id": artifact_id,
             "changed": revision["changed"],
+            "revised_section_ids": revised_ids,
             "sentence_quality_repair": sentence_repair_report,
         },
         token_usage=(
@@ -4546,7 +4572,7 @@ def _run_targeted_revision_stage(
         section_drafts=section_drafts,
         revision=revision,
         revision_time=revision_time,
-        artifact_ids=[artifact_id],
+        artifact_ids=persisted_artifact_ids + [artifact_id],
     )
 
 
@@ -5069,7 +5095,9 @@ def _workflow_step_details(
     elif phase == "targeted_revision":
         revision = (artifacts_by_type.get("targeted_revision") or [{}])[-1].get("content") or {}
         details["changed"] = revision.get("changed")
-        details["section_count"] = len(revision.get("sections") or [])
+        details["section_count"] = len(
+            revision.get("revised_section_ids") or revision.get("sections") or []
+        )
     elif phase == "final_merge":
         draft = (artifacts_by_type.get("draft") or [{}])[-1].get("content") or {}
         markdown = draft.get("markdown", "")
