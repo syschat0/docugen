@@ -1274,6 +1274,25 @@ label {
 
 .version-item.comparing {
   border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.version-list .compare-hint {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--warning);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.version-actions button.compare-selected {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 25%, transparent);
+  color: var(--text);
+}
+
+.version-actions button.compare-selected:hover {
+  background: color-mix(in srgb, var(--warning) 35%, transparent);
 }
 
 .draft-preview.compare-view {

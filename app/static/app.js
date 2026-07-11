@@ -51,7 +51,7 @@ const translations = {
     compareClose: "Close comparison",
     compareConditions: "Generation condition changes",
     compareNoChanges: "These versions are identical.",
-    comparePickSecond: "Select one more version to compare",
+    comparePickSecond: "v{version} selected — pick one more version to compare",
     compareSummary: "{changed} changed · {added} added · {removed} removed",
     compareTitle: "Comparing v{from} → v{to}",
     completed: "completed",
@@ -346,7 +346,7 @@ const translations = {
     compareClose: "비교 닫기",
     compareConditions: "생성 조건 변경",
     compareNoChanges: "두 버전의 내용이 동일합니다.",
-    comparePickSecond: "비교할 버전을 하나 더 선택하세요",
+    comparePickSecond: "v{version} 선택됨 — 비교할 버전을 하나 더 선택하세요",
     compareSummary: "변경 {changed} · 추가 {added} · 삭제 {removed}",
     compareTitle: "v{from} → v{to} 비교",
     completed: "완료",
@@ -2520,11 +2520,12 @@ function renderVersions() {
   }
 
   const viewed = currentDraft();
-  const selectedIds = compareDrafts().map((draft) => draft.id);
-  if (selectedIds.length === 1) {
+  const selectedDrafts = compareDrafts();
+  const selectedIds = selectedDrafts.map((draft) => draft.id);
+  if (selectedDrafts.length === 1) {
     const hint = document.createElement("p");
-    hint.className = "item-meta";
-    hint.textContent = t("comparePickSecond");
+    hint.className = "item-meta compare-hint";
+    hint.textContent = t("comparePickSecond", { version: selectedDrafts[0].version });
     els.versionList.append(hint);
   }
   for (const draft of drafts) {
@@ -2569,8 +2570,11 @@ function renderVersions() {
     actions.append(viewBtn);
     const compareBtn = document.createElement("button");
     compareBtn.type = "button";
+    const isSelected = selectedIds.includes(draft.id);
     compareBtn.className = "secondary";
-    compareBtn.textContent = t("compare");
+    compareBtn.classList.toggle("compare-selected", isSelected);
+    compareBtn.setAttribute("aria-pressed", String(isSelected));
+    compareBtn.textContent = isSelected ? `✓ ${t("compare")}` : t("compare");
     compareBtn.addEventListener("click", () => {
       toggleCompareSelection(draft.id);
       renderDraftPreview();
