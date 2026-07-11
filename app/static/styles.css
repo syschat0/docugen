@@ -1272,6 +1272,133 @@ label {
   border-radius: var(--btn-radius-sm);
 }
 
+.version-item.comparing {
+  border-color: var(--warning);
+}
+
+.draft-preview.compare-view {
+  display: grid;
+  gap: 14px;
+}
+
+.compare-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: var(--border-thin);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.compare-banner-title {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.compare-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.compare-conditions {
+  border: var(--border-thin);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  padding: 10px 12px;
+}
+
+.compare-conditions-title {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.compare-conditions ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.compare-section {
+  border: var(--border-thin);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 8px 12px;
+}
+
+.compare-section summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compare-section-title {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.compare-unchanged summary {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.compare-unchanged ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.diff-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.diff-badge.added {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.diff-badge.removed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.diff-badge.changed {
+  background: rgba(247, 148, 29, 0.18);
+  color: var(--warning);
+}
+
+.compare-body {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: var(--text);
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+.compare-body ins {
+  background: rgba(46, 160, 67, 0.18);
+  text-decoration: none;
+}
+
+.compare-body del {
+  background: rgba(248, 81, 73, 0.18);
+  text-decoration: line-through;
+}
+
 .markdown-body {
   line-height: 1.65;
   white-space: normal;

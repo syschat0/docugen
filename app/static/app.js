@@ -19,6 +19,7 @@ const state = {
   projectSettings: null,
   quality: null,
   viewDraftId: null,
+  compareDraftId: null,
   versionsOpen: false,
   progress: null,
   appliedPhase: null,
@@ -46,6 +47,12 @@ const translations = {
     chapters: "Chapters",
     characters: "Characters",
     checkingApi: "Checking API status",
+    compare: "Compare",
+    compareClose: "Close comparison",
+    compareConditions: "Generation condition changes",
+    compareNoChanges: "These versions are identical.",
+    compareSummary: "{changed} changed · {added} added · {removed} removed",
+    compareTitle: "Comparing v{from} → v{to}",
     completed: "completed",
     review_needed: "review needed",
     createProject: "Create Project",
@@ -59,6 +66,10 @@ const translations = {
     deleteProject: "Delete project",
     deleteProjectConfirm:
       'Delete "{title}"? This will remove its questions, answers, artifacts, summaries, and run logs.',
+    diffAdded: "Added",
+    diffChanged: "Changed",
+    diffRemoved: "Removed",
+    diffUnchanged: "Unchanged sections ({count})",
     draftEmpty: "Run the pipeline to generate a draft.",
     draftPreview: "Draft Preview",
     duration: "Duration",
@@ -162,6 +173,9 @@ const translations = {
     condSearch: "Search",
     condCitations: "Citations",
     condRefs: "Refs",
+    condModel: "Model",
+    condLength: "Target length",
+    condDocType: "Document type",
     noVersions: "No versions yet.",
     questionAdded: "Question added.",
     questions: "Questions",
@@ -327,6 +341,12 @@ const translations = {
     chapters: "목차",
     characters: "문자 수",
     checkingApi: "API 상태 확인 중",
+    compare: "비교",
+    compareClose: "비교 닫기",
+    compareConditions: "생성 조건 변경",
+    compareNoChanges: "두 버전의 내용이 동일합니다.",
+    compareSummary: "변경 {changed} · 추가 {added} · 삭제 {removed}",
+    compareTitle: "v{from} → v{to} 비교",
     completed: "완료",
     review_needed: "검토 필요",
     createProject: "프로젝트 생성",
@@ -340,6 +360,10 @@ const translations = {
     deleteProject: "프로젝트 삭제",
     deleteProjectConfirm:
       '"{title}" 프로젝트를 삭제할까요? 질문, 답변, 산출물, 요약, 실행 로그가 모두 삭제됩니다.',
+    diffAdded: "추가됨",
+    diffChanged: "변경됨",
+    diffRemoved: "삭제됨",
+    diffUnchanged: "변경 없는 섹션 ({count})",
     draftEmpty: "파이프라인을 실행하면 초안이 생성됩니다.",
     draftPreview: "초안 미리보기",
     qualitySummary: "품질 요약",
@@ -518,6 +542,9 @@ const translations = {
     condSearch: "검색",
     condCitations: "인용",
     condRefs: "참조",
+    condModel: "모델",
+    condLength: "목표 분량",
+    condDocType: "문서 유형",
     noVersions: "아직 버전이 없습니다.",
     questionAdded: "질문을 추가했습니다.",
     questions: "질문",
@@ -2394,6 +2421,7 @@ function renderDraftPreview() {
   renderVersions();
   updateVersionsVisibility();
   if (!draft) {
+    state.compareDraftId = null;
     els.draftStatus.textContent = t("noDraft");
     if (els.formViewButton) {
       els.formViewButton.disabled = true;
@@ -2402,13 +2430,33 @@ function renderDraftPreview() {
     els.draftToc.innerHTML = "";
     els.draftViewer.classList.add("no-toc");
     els.draftPreview.classList.add("markdown-body");
-    els.draftPreview.classList.remove("raw");
+    els.draftPreview.classList.remove("raw", "compare-view");
     els.draftPreview.textContent = t("draftEmpty");
     return;
   }
   if (els.formViewButton) {
     els.formViewButton.disabled = false;
   }
+
+  const comparing = compareDraft();
+  if (state.compareDraftId && !comparing) {
+    // Target went stale (removed, or now equals the viewed version): reset quietly.
+    state.compareDraftId = null;
+  }
+  if (comparing) {
+    const [fromDraft, toDraft] =
+      comparing.version < draft.version ? [comparing, draft] : [draft, comparing];
+    els.draftStatus.textContent = `v${fromDraft.version} ↔ v${toDraft.version}`;
+    els.draftToc.classList.add("hidden");
+    els.draftToc.innerHTML = "";
+    els.draftViewer.classList.add("no-toc");
+    els.draftPreview.classList.remove("markdown-body", "raw");
+    els.draftPreview.classList.add("compare-view");
+    renderCompareView(fromDraft, toDraft);
+    return;
+  }
+  els.draftPreview.classList.remove("compare-view");
+
   const drafts = draftVersions();
   const isLatest = drafts[0] && draft.id === drafts[0].id;
   els.draftStatus.textContent = isLatest ? `v${draft.version}` : `v${draft.version} · ${t("viewVersion")}`;
@@ -2471,6 +2519,7 @@ function renderVersions() {
   }
 
   const viewed = currentDraft();
+  const comparingDraft = compareDraft();
   for (const draft of drafts) {
     const isLatest = draft.id === drafts[0].id;
     const isViewing = viewed && draft.id === viewed.id;
@@ -2478,6 +2527,10 @@ function renderVersions() {
     const row = document.createElement("div");
     row.className = "version-item";
     row.classList.toggle("viewing", Boolean(isViewing));
+    row.classList.toggle(
+      "comparing",
+      Boolean(comparingDraft && draft.id === comparingDraft.id),
+    );
 
     const meta = document.createElement("div");
     meta.className = "version-meta";
@@ -2505,10 +2558,21 @@ function renderVersions() {
     viewBtn.textContent = t("viewVersion");
     viewBtn.disabled = Boolean(isViewing);
     viewBtn.addEventListener("click", () => {
+      state.compareDraftId = null;
       state.viewDraftId = draft.id;
       renderDraftPreview();
     });
     actions.append(viewBtn);
+    const compareBtn = document.createElement("button");
+    compareBtn.type = "button";
+    compareBtn.className = "secondary";
+    compareBtn.textContent = t("compare");
+    compareBtn.disabled = Boolean(isViewing);
+    compareBtn.addEventListener("click", () => {
+      state.compareDraftId = draft.id;
+      renderDraftPreview();
+    });
+    actions.append(compareBtn);
     if (!isLatest) {
       const restoreBtn = document.createElement("button");
       restoreBtn.type = "button";
@@ -2531,11 +2595,398 @@ async function restoreVersion(artifactId) {
       body: JSON.stringify({}),
     });
     state.viewDraftId = null;
+    state.compareDraftId = null;
     showToast(t("restoredToast"));
     await loadArtifacts();
     renderDraftPreview();
   } catch (error) {
     showToast(error.message, true);
+  }
+}
+
+// The version currently being compared against the viewed draft, or null when
+// compare mode is inactive. Compare mode needs a stored target that still
+// exists and differs from the version on screen.
+function compareDraft() {
+  if (!state.compareDraftId) return null;
+  const drafts = draftVersions();
+  const target = drafts.find((draft) => draft.id === state.compareDraftId);
+  const viewed = currentDraft();
+  if (!target || !viewed || target.id === viewed.id) return null;
+  return target;
+}
+
+// Splits markdown into sections keyed on their heading. A section spans from a
+// heading line to the next heading; text before the first heading is a
+// preamble (heading null). Fenced code blocks are skipped so a `#` comment
+// inside them is not mistaken for a heading.
+function splitMarkdownSections(markdown) {
+  const lines = String(markdown || "").split("\n");
+  const sections = [];
+  let current = { heading: null, numericId: null, titleKey: null, lines: [] };
+  let inFence = false;
+
+  const finalize = () => {
+    const body = current.lines.join("\n");
+    if (current.heading === null && body.trim() === "") return;
+    sections.push({
+      heading: current.heading,
+      numericId: current.numericId,
+      titleKey: current.titleKey,
+      body,
+    });
+  };
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+    } else if (!inFence && /^#{1,6}\s/.test(line)) {
+      finalize();
+      const text = line.replace(/^#{1,6}\s+/, "").trim();
+      const numericId = text.match(/^(\d+(?:\.\d+)*)\s+/)?.[1] || null;
+      current = {
+        heading: text,
+        numericId,
+        titleKey: normalizeSectionHeadingText(text),
+        lines: [line],
+      };
+      continue;
+    }
+    current.lines.push(line);
+  }
+  finalize();
+  return sections;
+}
+
+// Pairs base sections with target sections across three passes so re-numbering
+// and title edits still line up: exact match, then title-only, then id-only.
+function matchSections(baseSections, targetSections) {
+  const pairs = [];
+  const baseUsed = new Array(baseSections.length).fill(false);
+  const targetUsed = new Array(targetSections.length).fill(false);
+
+  const runPass = (predicate) => {
+    for (let i = 0; i < baseSections.length; i++) {
+      if (baseUsed[i]) continue;
+      for (let j = 0; j < targetSections.length; j++) {
+        if (targetUsed[j]) continue;
+        if (predicate(baseSections[i], targetSections[j])) {
+          baseUsed[i] = true;
+          targetUsed[j] = true;
+          pairs.push({ base: baseSections[i], target: targetSections[j] });
+          break;
+        }
+      }
+    }
+  };
+
+  runPass((b, t) => b.numericId === t.numericId && b.titleKey === t.titleKey);
+  runPass((b, t) => b.titleKey !== null && b.titleKey === t.titleKey);
+  runPass((b, t) => b.numericId !== null && b.numericId === t.numericId);
+
+  const removed = baseSections.filter((_, i) => !baseUsed[i]);
+  const added = targetSections.filter((_, j) => !targetUsed[j]);
+  return { pairs, removed, added };
+}
+
+// Classic LCS diff over two token arrays. Guards against pathological inputs by
+// falling back to a full replacement when the DP table would get too large.
+function lcsDiff(tokensA, tokensB) {
+  const n = tokensA.length;
+  const m = tokensB.length;
+  if (n * m > 500000) {
+    return [
+      ...tokensA.map((token) => ({ type: "del", token })),
+      ...tokensB.map((token) => ({ type: "ins", token })),
+    ];
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] =
+        tokensA[i] === tokensB[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const result = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (tokensA[i] === tokensB[j]) {
+      result.push({ type: "same", token: tokensA[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      result.push({ type: "del", token: tokensA[i] });
+      i++;
+    } else {
+      result.push({ type: "ins", token: tokensB[j] });
+      j++;
+    }
+  }
+  while (i < n) {
+    result.push({ type: "del", token: tokensA[i] });
+    i++;
+  }
+  while (j < m) {
+    result.push({ type: "ins", token: tokensB[j] });
+    j++;
+  }
+  return result;
+}
+
+function tokenizeWords(text) {
+  return text.split(/(\s+)/).filter(Boolean);
+}
+
+// Produces render parts ({type, text}) for two section bodies. Lines are
+// diffed first; a deletion run immediately followed by an insertion run is a
+// replacement, so it is re-diffed at the word level for a tighter highlight.
+function diffSectionBody(baseBody, targetBody) {
+  const toLineTokens = (text) => text.split("\n").map((line) => line + "\n");
+  const lineDiff = lcsDiff(toLineTokens(baseBody), toLineTokens(targetBody));
+
+  const runs = [];
+  for (const tok of lineDiff) {
+    const last = runs[runs.length - 1];
+    if (last && last.type === tok.type) last.text += tok.token;
+    else runs.push({ type: tok.type, text: tok.token });
+  }
+
+  const parts = [];
+  const pushPart = (type, text) => {
+    if (!text) return;
+    const last = parts[parts.length - 1];
+    if (last && last.type === type) last.text += text;
+    else parts.push({ type, text });
+  };
+
+  for (let r = 0; r < runs.length; r++) {
+    const run = runs[r];
+    const next = runs[r + 1];
+    if (run.type === "del" && next && next.type === "ins") {
+      const wordDiff = lcsDiff(tokenizeWords(run.text), tokenizeWords(next.text));
+      for (const w of wordDiff) pushPart(w.type, w.token);
+      r++;
+      continue;
+    }
+    pushPart(run.type, run.text);
+  }
+
+  // Drop the phantom trailing newline that toLineTokens appended.
+  if (parts.length) {
+    const last = parts[parts.length - 1];
+    last.text = last.text.replace(/\n$/, "");
+    if (!last.text) parts.pop();
+  }
+  return parts;
+}
+
+const COMPARE_CONDITION_KEYS = [
+  { key: "search_enabled", label: () => t("condSearch"), format: (v) => (v ? t("on") : t("off")) },
+  {
+    key: "citations_enabled",
+    label: () => t("condCitations"),
+    format: (v) => (v === false ? t("off") : t("on")),
+  },
+  {
+    key: "citation_style",
+    label: () => t("citationStyle"),
+    format: (v) => (v === "author_date" ? t("citationAuthorDate") : t("citationNumeric")),
+  },
+  { key: "reference_count", label: () => t("condRefs"), format: (v) => String(v ?? 0) },
+  { key: "model", label: () => t("condModel"), format: (v) => (v ? String(v) : "—") },
+  {
+    key: "target_length",
+    label: () => t("condLength"),
+    format: (v) => (v ? String(v) : t("targetLengthAuto")),
+  },
+  {
+    key: "document_type",
+    label: () => t("condDocType"),
+    format: (v) => (v ? String(v) : t("autoDetect")),
+  },
+];
+
+// Lists the generation-condition keys whose formatted value changed between the
+// two drafts. Skipped entirely when neither draft stored any conditions.
+function compareConditionRows(fromConditions, toConditions) {
+  if (!fromConditions && !toConditions) return [];
+  const from = fromConditions || {};
+  const to = toConditions || {};
+  const rows = [];
+  for (const spec of COMPARE_CONDITION_KEYS) {
+    const fromValue = spec.format(from[spec.key]);
+    const toValue = spec.format(to[spec.key]);
+    if (fromValue !== toValue) {
+      rows.push({ label: spec.label(), from: fromValue, to: toValue });
+    }
+  }
+  return rows;
+}
+
+function buildCompareSectionBlock(status, heading, parts) {
+  const details = document.createElement("details");
+  details.className = "compare-section";
+  details.open = true;
+
+  const summary = document.createElement("summary");
+  const badge = document.createElement("span");
+  badge.className = `diff-badge ${status}`;
+  badge.textContent =
+    status === "added" ? t("diffAdded") : status === "removed" ? t("diffRemoved") : t("diffChanged");
+  const label = document.createElement("span");
+  label.className = "compare-section-title";
+  label.textContent = heading || "…";
+  summary.append(badge, label);
+  details.append(summary);
+
+  const body = document.createElement("div");
+  body.className = "compare-body";
+  for (const part of parts) {
+    if (part.type === "same") {
+      body.append(document.createTextNode(part.text));
+    } else if (part.type === "del") {
+      const del = document.createElement("del");
+      del.textContent = part.text;
+      body.append(del);
+    } else {
+      const ins = document.createElement("ins");
+      ins.textContent = part.text;
+      body.append(ins);
+    }
+  }
+  details.append(body);
+  return details;
+}
+
+// Renders the side-by-side-ish diff of two drafts into the preview pane. Only
+// createElement/textContent is used so document text is never treated as HTML.
+function renderCompareView(from, to) {
+  const container = els.draftPreview;
+  container.replaceChildren();
+
+  const banner = document.createElement("div");
+  banner.className = "compare-banner";
+  const bannerTitle = document.createElement("span");
+  bannerTitle.className = "compare-banner-title";
+  bannerTitle.textContent = t("compareTitle", { from: from.version, to: to.version });
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "secondary";
+  closeBtn.textContent = t("compareClose");
+  closeBtn.addEventListener("click", () => {
+    state.compareDraftId = null;
+    renderDraftPreview();
+  });
+  banner.append(bannerTitle, closeBtn);
+  container.append(banner);
+
+  const fromSections = splitMarkdownSections(artifactBodyText(from));
+  const toSections = splitMarkdownSections(artifactBodyText(to));
+  const { pairs, removed, added } = matchSections(fromSections, toSections);
+  const condRows = compareConditionRows(from.content?.conditions, to.content?.conditions);
+
+  const changedCount = pairs.filter((pair) => pair.base.body !== pair.target.body).length;
+  if (
+    changedCount === 0 &&
+    added.length === 0 &&
+    removed.length === 0 &&
+    condRows.length === 0
+  ) {
+    const message = document.createElement("p");
+    message.className = "compare-summary";
+    message.textContent = t("compareNoChanges");
+    container.append(message);
+    return;
+  }
+
+  const summary = document.createElement("p");
+  summary.className = "compare-summary";
+  summary.textContent = t("compareSummary", {
+    changed: changedCount,
+    added: added.length,
+    removed: removed.length,
+  });
+  container.append(summary);
+
+  if (condRows.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "compare-conditions";
+    const heading = document.createElement("p");
+    heading.className = "compare-conditions-title";
+    heading.textContent = t("compareConditions");
+    const list = document.createElement("ul");
+    for (const row of condRows) {
+      const li = document.createElement("li");
+      li.textContent = `${row.label}: ${row.from} → ${row.to}`;
+      list.append(li);
+    }
+    wrap.append(heading, list);
+    container.append(wrap);
+  }
+
+  // Merge-walk in target order, splicing removed sections in at their base
+  // position so the reader still sees where a dropped section used to sit.
+  const pairByBase = new Map(pairs.map((pair) => [pair.base, pair]));
+  const pairByTarget = new Map(pairs.map((pair) => [pair.target, pair]));
+  const baseIndexOf = new Map(fromSections.map((section, index) => [section, index]));
+  const emittedBase = new Set();
+  const unchangedTitles = [];
+  let baseCursor = 0;
+
+  const emitRemoved = (section) => {
+    if (emittedBase.has(section) || pairByBase.get(section)) return;
+    emittedBase.add(section);
+    container.append(
+      buildCompareSectionBlock("removed", section.heading, [{ type: "del", text: section.body }]),
+    );
+  };
+
+  for (const target of toSections) {
+    const pair = pairByTarget.get(target);
+    if (!pair) {
+      container.append(
+        buildCompareSectionBlock("added", target.heading, [{ type: "ins", text: target.body }]),
+      );
+      continue;
+    }
+    const partnerIndex = baseIndexOf.get(pair.base);
+    while (baseCursor < partnerIndex) {
+      emitRemoved(fromSections[baseCursor]);
+      baseCursor++;
+    }
+    if (baseCursor === partnerIndex) baseCursor++;
+    emittedBase.add(pair.base);
+    if (pair.base.body === pair.target.body) {
+      unchangedTitles.push(pair.target.heading || "…");
+    } else {
+      container.append(
+        buildCompareSectionBlock(
+          "changed",
+          pair.target.heading,
+          diffSectionBody(pair.base.body, pair.target.body),
+        ),
+      );
+    }
+  }
+  for (const section of fromSections) emitRemoved(section);
+
+  if (unchangedTitles.length) {
+    const details = document.createElement("details");
+    details.className = "compare-section compare-unchanged";
+    const summaryEl = document.createElement("summary");
+    summaryEl.textContent = t("diffUnchanged", { count: unchangedTitles.length });
+    details.append(summaryEl);
+    const list = document.createElement("ul");
+    for (const titleText of unchangedTitles) {
+      const li = document.createElement("li");
+      li.textContent = titleText;
+      list.append(li);
+    }
+    details.append(list);
+    container.append(details);
   }
 }
 
@@ -2958,6 +3409,7 @@ els.addArtifactToggle.addEventListener("click", () => {
 });
 
 els.draftViewToggle.addEventListener("click", () => {
+  state.compareDraftId = null;
   state.draftView = state.draftView === "rendered" ? "raw" : "rendered";
   renderDraftPreview();
 });
