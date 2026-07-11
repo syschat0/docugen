@@ -720,6 +720,22 @@ label {
   padding: 14px;
 }
 
+.topbar-link {
+  border: var(--outline);
+  border-radius: var(--btn-radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--btn-pad);
+  box-shadow: var(--shadow-small);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.topbar-link:hover {
+  background: var(--surface-muted);
+}
+
 .quality-panel {
   border-left: 5px solid var(--ok);
 }

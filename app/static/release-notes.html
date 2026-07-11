@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko" data-theme="pastel">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DocuGen · 기능 및 릴리즈</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍩</text></svg>"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Jua&family=Luckiest+Guy&family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&family=Noto+Serif+KR:wght@400;700;900&display=swap"
+    />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260711-release1" />
+    <link rel="stylesheet" href="/ui/release-notes.css?v=20260711-release1" />
+    <script>
+      document.documentElement.dataset.theme = localStorage.getItem("docugenTheme") || "pastel";
+    </script>
+  </head>
+  <body class="release-page">
+    <header class="release-header">
+      <a class="release-brand" href="/ui/" aria-label="DocuGen workspace">
+        <span class="brand-mark" aria-hidden="true">D</span>
+        <span>
+          <strong>DocuGen</strong>
+          <small id="brandSubtitle">기능 및 릴리즈</small>
+        </span>
+      </a>
+      <nav class="release-nav" aria-label="Page sections">
+        <a href="#overview" id="navOverview">개요</a>
+        <a href="#features" id="navFeatures">주요 기능</a>
+        <a href="#releases" id="navReleases">릴리즈 노트</a>
+      </nav>
+      <div class="release-controls">
+        <label>
+          <span id="themeLabel">테마</span>
+          <select id="releaseTheme" aria-label="Theme">
+            <option value="pastel">Pastel</option>
+            <option value="simpsons">Simpsons</option>
+            <option value="newspaper">Newspaper</option>
+          </select>
+        </label>
+        <label>
+          <span id="languageLabel">언어</span>
+          <select id="releaseLanguage" aria-label="Language">
+            <option value="ko">한국어</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <a class="workspace-link" href="/ui/" id="backToWorkspace">작업 공간으로</a>
+      </div>
+    </header>
+
+    <main id="releaseApp" class="release-main" aria-live="polite">
+      <section class="release-loading">
+        <p>릴리즈 정보를 불러오는 중입니다…</p>
+      </section>
+    </main>
+
+    <footer class="release-footer">
+      <p>DocuGen · Quality-first document generation for small language models.</p>
+      <a href="/ui/" id="footerBack">문서 작성으로 돌아가기</a>
+    </footer>
+
+    <script src="/ui/release-notes.js?v=20260711-release1"></script>
+  </body>
+</html>

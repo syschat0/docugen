@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "current_version": "1.0.0",
+  "product": "DocuGen",
+  "workflow": {
+    "en": [
+      "Describe the document and choose a document type.",
+      "Answer only the intake questions that materially affect the draft.",
+      "Run the staged writer and inspect sources, evidence, and quality findings.",
+      "Send feedback to a specific section, improve it, and export the approved version."
+    ],
+    "ko": [
+      "작성할 문서를 설명하고 문서 유형을 선택합니다.",
+      "초안 품질에 실제로 영향을 주는 인테이크 질문만 답합니다.",
+      "단계별 작성기를 실행하고 출처·근거·품질 결과를 확인합니다.",
+      "필요한 섹션에 피드백을 보내 개선한 뒤 승인한 버전을 내보냅니다."
+    ]
+  },
+  "features": [
+    {
+      "id": "slm-pipeline",
+      "icon": "01",
+      "title": {"en": "Small-model writing pipeline", "ko": "소형 모델용 단계별 작성"},
+      "summary": {
+        "en": "Breaks a long document into intake, research, planning, section writing, review, revision, and merge stages so a small model handles one bounded job at a time.",
+        "ko": "긴 문서를 인테이크·리서치·계획·섹션 작성·검토·수정·병합으로 나눠 작은 모델이 한 번에 제한된 작업만 처리합니다."
+      },
+      "bullets": {
+        "en": ["Stage-level retry and reuse", "Chapter digests and genre-aware handoffs", "Per-stage token and temperature controls"],
+        "ko": ["단계별 재실행과 산출물 재사용", "장 요약과 장르별 핸드오프 메모리", "단계별 토큰·temperature 제어"]
+      }
+    },
+    {
+      "id": "document-types",
+      "icon": "02",
+      "title": {"en": "Six document types", "ko": "6개 문서 유형"},
+      "summary": {
+        "en": "Report, academic paper, blog post, essay, technical documentation, and presentation script each use their own intake priorities, structure, style, rubric, and memory.",
+        "ko": "보고서·소논문·블로그·에세이·기술 문서·발표 대본이 각각 다른 질문, 구조, 문체, 루브릭과 메모리를 사용합니다."
+      },
+      "bullets": {
+        "en": ["Automatic type detection or manual selection", "Type-aware research and citations", "Type-specific heading and length rules"],
+        "ko": ["자동 유형 감지 또는 직접 선택", "유형별 리서치·인용 게이팅", "유형별 제목·분량 규칙"]
+      }
+    },
+    {
+      "id": "evidence",
+      "icon": "03",
+      "title": {"en": "Source and evidence safeguards", "ko": "출처 및 근거 안전장치"},
+      "summary": {
+        "en": "Ranks source trust, prefers authoritative material for high-stakes topics, and verifies that citation ledgers contain excerpts that support the written claim.",
+        "ko": "출처 신뢰도를 구분하고 고위험 주제에는 권위 있는 자료를 우선하며, 인용 근거 원문이 실제 주장과 연결되는지 검증합니다."
+      },
+      "bullets": {
+        "en": ["Project references outrank web results", "Numeric and author-date citations", "Bounded evidence repair with visible failures"],
+        "ko": ["사용자 첨부 자료를 웹 결과보다 우선", "숫자형·저자-연도형 인용", "실패를 숨기지 않는 제한적 근거 복구"]
+      }
+    },
+    {
+      "id": "quality",
+      "icon": "04",
+      "title": {"en": "Deterministic quality review", "ko": "결정적 품질 검토"},
+      "summary": {
+        "en": "Checks repetition, contradictions, unsupported certainty, sentence and paragraph density, structure, continuity, and the selected type's quality rubric.",
+        "ko": "반복·상반 진술·무근거 단정·문장과 문단 밀도·구조·연속성·문서 유형별 루브릭을 함께 검사합니다."
+      },
+      "bullets": {
+        "en": ["Jump from an issue to its section", "Acknowledge or waive per draft version", "Auto-repair only when measurable quality improves"],
+        "ko": ["이슈에서 해당 섹션으로 바로 이동", "초안 버전별 확인·예외 처리", "측정 품질이 개선될 때만 자동 수정 채택"]
+      }
+    },
+    {
+      "id": "feedback-versions",
+      "icon": "05",
+      "title": {"en": "Targeted feedback and versions", "ko": "섹션 피드백과 버전 관리"},
+      "summary": {
+        "en": "Improves only the section that needs work, preserves earlier artifacts, and records the conditions used for every final draft version.",
+        "ko": "개선이 필요한 섹션만 다시 작성하고 이전 산출물을 보존하며, 각 최종 초안이 생성된 조건을 버전별로 기록합니다."
+      },
+      "bullets": {
+        "en": ["Quality issue to feedback in one action", "Restore an older draft as a new version", "Style samples for the writer's own voice"],
+        "ko": ["품질 이슈를 한 번에 섹션 피드백으로 전환", "과거 초안을 새 버전으로 복원", "사용자 글투를 반영하는 스타일 샘플"]
+      }
+    },
+    {
+      "id": "evaluation",
+      "icon": "06",
+      "title": {"en": "SLM evaluation toolkit", "ko": "SLM 평가 도구"},
+      "summary": {
+        "en": "Compares real before-and-after model runs with the same deterministic metrics and produces a separate blind A/B form for human review.",
+        "ko": "실제 모델의 개선 전후 결과를 동일한 결정 지표로 비교하고, 사람 평가를 위한 별도 블라인드 A/B 평가표를 만듭니다."
+      },
+      "bullets": {
+        "en": ["Six representative document-type cases", "Automatic regression report", "Human score and preference aggregation"],
+        "ko": ["6개 문서 유형 대표 케이스", "자동 회귀 비교 보고서", "사람 점수·선호도 집계"]
+      }
+    }
+  ],
+  "releases": [
+    {
+      "version": "1.0.0",
+      "date": "2026-07-11",
+      "name": {"en": "Quality-first SLM writing", "ko": "품질 중심 SLM 문서 작성"},
+      "summary": {
+        "en": "The first complete release of DocuGen's staged document workflow, evidence safeguards, type-aware writing, targeted revision, and evaluation tools.",
+        "ko": "단계별 문서 작성, 근거 안전장치, 유형별 글쓰기, 타깃 수정과 평가 도구를 갖춘 DocuGen의 첫 완성 릴리즈입니다."
+      },
+      "sections": [
+        {
+          "key": "added",
+          "title": {"en": "Added", "ko": "새 기능"},
+          "items": {
+            "en": [
+              "Six type-aware writing profiles with dedicated intake, rubric, memory, research, and generation settings.",
+              "Staged pipeline from intake through final merge with partial reruns and cached artifact reuse.",
+              "Source grading, high-stakes authority top-ups, evidence-ledger validation, and two citation styles.",
+              "Sentence, structure, continuity, and rubric quality gates with bounded automatic repair.",
+              "Section feedback, quality-issue navigation, draft-version decisions, restore, and export.",
+              "Offline quality benchmark and real SLM before/after blind evaluation workflow."
+            ],
+            "ko": [
+              "전용 인테이크·루브릭·메모리·리서치·생성 설정을 갖춘 6개 문서 유형 프로파일.",
+              "인테이크부터 최종 병합까지 단계별 실행, 부분 재실행, 캐시 산출물 재사용.",
+              "출처 등급, 고위험 권위 출처 보강, 근거 원장 검증, 2개 인용 스타일.",
+              "문장·구조·연속성·루브릭 품질 게이트와 제한적 자동 보정.",
+              "섹션 피드백, 품질 이슈 이동, 초안 버전별 결정, 복원과 내보내기.",
+              "오프라인 품질 벤치마크와 실제 SLM 전후 블라인드 평가 워크플로."
+            ]
+          }
+        },
+        {
+          "key": "improved",
+          "title": {"en": "Improved", "ko": "개선"},
+          "items": {
+            "en": [
+              "Reduced small-model context pressure with section summaries, chapter digests, compact source passages, and genre-specific handoffs.",
+              "Made research and citations conditional on document type while preserving user-provided references.",
+              "Connected every visible quality warning to a concrete section-level improvement path."
+            ],
+            "ko": [
+              "섹션 요약·장 요약·짧은 출처 원문·장르별 핸드오프로 소형 모델의 문맥 부담을 절감.",
+              "사용자 첨부 자료는 유지하면서 문서 유형에 따라 리서치와 인용을 조건부 실행.",
+              "모든 품질 경고를 구체적인 섹션 개선 경로와 연결."
+            ]
+          }
+        },
+        {
+          "key": "fixed",
+          "title": {"en": "Fixed", "ko": "수정"},
+          "items": {
+            "en": [
+              "Prevented stale draft reuse after input, feedback, citation-style, or stage changes.",
+              "Kept heading numbering, source numbering, evidence state, and revision freshness consistent across reruns.",
+              "Prevented global search restrictions from being bypassed by a project override."
+            ],
+            "ko": [
+              "입력·피드백·인용 스타일·단계 변경 후 오래된 초안이 재사용되는 문제 수정.",
+              "재실행 시 제목 번호·출처 번호·근거 상태·수정 신선도 일관성 유지.",
+              "프로젝트 설정이 전역 검색 차단을 우회하지 못하도록 수정."
+            ]
+          }
+        },
+        {
+          "key": "known",
+          "title": {"en": "Known limitations", "ko": "알려진 제한"},
+          "items": {
+            "en": [
+              "High-stakes documents still require qualified human review; quality gates reduce risk but do not certify correctness.",
+              "Search coverage depends on the configured engine and access conditions.",
+              "The personal knowledge base and category tree are planned for a later release."
+            ],
+            "ko": [
+              "고위험 문서는 전문가 검토가 필요합니다. 품질 게이트는 위험을 줄이지만 정확성을 인증하지 않습니다.",
+              "검색 범위는 설정한 검색 엔진과 접근 환경에 따라 달라집니다.",
+              "개인 Knowledge Base와 카테고리 트리는 후속 릴리즈로 계획되어 있습니다."
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
