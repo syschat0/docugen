@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "current_version": "1.0.0",
+  "current_version": "1.0.1",
   "product": "DocuGen",
   "workflow": {
     "en": [
@@ -97,6 +97,73 @@
     }
   ],
   "releases": [
+    {
+      "version": "1.0.1",
+      "date": "2026-07-11",
+      "name": {"en": "Converging document improvement", "ko": "수렴하는 문서 개선"},
+      "summary": {
+        "en": "Improve Draft now performs real review-and-revision rounds: each pass re-reviews the revised text, re-verifies citation evidence, and stops changing the document once the remaining findings are resolved.",
+        "ko": "문서 개선이 실제 검토·수정 사이클로 동작합니다. 매 실행이 수정된 본문을 다시 검토하고 인용 근거를 재검증하며, 남은 이슈가 해소되면 더 이상 문서를 바꾸지 않습니다."
+      },
+      "sections": [
+        {
+          "key": "added",
+          "title": {"en": "Added", "ko": "새 기능"},
+          "items": {
+            "en": [
+              "Sections changed by targeted revision are saved as new section versions, so every automatic fix is traceable in the artifact history."
+            ],
+            "ko": [
+              "부분 수정이 바꾼 섹션이 새 섹션 버전으로 저장되어, 자동 수정 내역을 산출물 이력에서 추적할 수 있습니다."
+            ]
+          }
+        },
+        {
+          "key": "improved",
+          "title": {"en": "Improved", "ko": "개선"},
+          "items": {
+            "en": [
+              "Repeated Improve Draft runs converge: each round reviews the previously revised text, so remaining issues shrink instead of the same findings repeating.",
+              "Citation evidence is re-verified right after a section is revised, so quality status can return to ready without a full rewrite."
+            ],
+            "ko": [
+              "문서 개선을 반복하면 매번 직전 수정본을 재검토해 같은 지적이 반복되지 않고 남은 이슈가 줄어듭니다.",
+              "섹션 수정 직후 인용 근거를 재검증해, 전체 재작성 없이도 품질 상태가 '준비됨'으로 돌아올 수 있습니다."
+            ]
+          }
+        },
+        {
+          "key": "fixed",
+          "title": {"en": "Fixed", "ko": "수정"},
+          "items": {
+            "en": [
+              "Improve Draft no longer skips through every pipeline stage without changing the document.",
+              "Rerunning from the continuity review, targeted revision, or final merge step now reruns exactly that part of the pipeline instead of reusing stale results or rewriting every section.",
+              "Revised sections no longer leave their evidence permanently marked stale, which kept documents stuck in the review-needed state."
+            ],
+            "ko": [
+              "문서 개선을 눌렀을 때 파이프라인 단계들이 아무 작업 없이 통과되던 문제를 수정했습니다.",
+              "흐름 검토·부분 수정·최종 병합 단계의 '여기서부터 다시 실행'이 오래된 결과를 재사용하거나 전체 재작성으로 번지지 않고 정확히 해당 구간만 다시 실행합니다.",
+              "수정된 섹션의 근거가 영구히 '오래됨'으로 남아 문서가 '검토 필요' 상태에서 벗어나지 못하던 문제를 수정했습니다."
+            ]
+          }
+        },
+        {
+          "key": "known",
+          "title": {"en": "Known limitations", "ko": "알려진 제한"},
+          "items": {
+            "en": [
+              "If any single section draft is missing or out of date, the writer still rewrites all sections; partial rewriting is planned.",
+              "High-stakes documents still require qualified human review."
+            ],
+            "ko": [
+              "섹션 초안이 하나라도 없거나 오래되면 아직 전체 섹션을 다시 작성합니다. 부분 재작성은 후속 릴리즈로 계획되어 있습니다.",
+              "고위험 문서는 여전히 전문가 검토가 필요합니다."
+            ]
+          }
+        }
+      ]
+    },
     {
       "version": "1.0.0",
       "date": "2026-07-11",
