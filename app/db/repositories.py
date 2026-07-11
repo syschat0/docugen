@@ -2632,6 +2632,13 @@ class WrittenSectionResult:
     usage_entries: list[Dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class FeedbackRevisionStageResult:
+    section_drafts: list[Dict[str, Any]]
+    section_work_time: str
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -3771,6 +3778,130 @@ def _write_planned_section(
     )
 
 
+def _run_feedback_revision_stage(
+    project_id: str,
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    profile: Dict[str, Any],
+    feedback_decisions: list[UserDecisionRead],
+    section_drafts: list[Dict[str, Any]],
+    section_work_time: str,
+    agent_name: str,
+) -> FeedbackRevisionStageResult:
+    """Apply only feedback newer than each section's current draft."""
+    pending_feedback = _pending_section_feedback(feedback_decisions, section_drafts)
+    if not pending_feedback:
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "feedback_revision",
+            {"applied_sections": [], "comment_count": 0},
+        )
+        return FeedbackRevisionStageResult(
+            section_drafts=section_drafts,
+            section_work_time=section_work_time,
+            artifact_ids=[],
+        )
+
+    run_id = _start_agent_run(
+        project_id,
+        agent_name,
+        "feedback_revision",
+        {
+            "section_ids": sorted(pending_feedback),
+            "comment_count": sum(len(items) for items in pending_feedback.values()),
+        },
+    )
+    feedback_usage: list[Dict[str, Any]] = []
+    applied_sections: list[str] = []
+    artifact_ids: list[str] = []
+    try:
+        for draft in section_drafts:
+            section = draft.get("section") or {}
+            section_id = str(section.get("id", ""))
+            decisions_for_section = pending_feedback.get(section_id)
+            if not decisions_for_section:
+                continue
+            comments = [decision.answer for decision in decisions_for_section]
+            if settings.llm_enabled:
+                markdown, usage = revise_section_with_feedback(
+                    project, brief, draft, comments
+                )
+            else:
+                notes = "\n".join(f"- {comment}" for comment in comments)
+                markdown, usage = (
+                    f"{draft.get('markdown', '')}\n\nUser feedback applied:\n{notes}",
+                    None,
+                )
+            markdown = _ensure_markdown_heading_number(
+                markdown,
+                section,
+                numbered=profile.get("numbered_headings", True),
+            )
+            draft_content = {
+                "section": section,
+                "markdown": markdown,
+                "sources": draft.get("sources") or [],
+                "evidence": draft.get("evidence") or [],
+                "evidence_validation": {
+                    "status": "stale",
+                    "reason": "section_revised_after_evidence_capture",
+                },
+                "evidence_repair": {
+                    "attempted": False,
+                    "succeeded": False,
+                    "reason": "section_revised_after_evidence_capture",
+                },
+            }
+            with get_connection() as conn:
+                artifact_id = _insert_artifact(
+                    conn,
+                    project_id,
+                    "section_draft",
+                    f"Section {section_id}: feedback applied",
+                    draft_content,
+                    utc_now_iso(),
+                    agent_name,
+                )
+            artifact_ids.append(artifact_id)
+            revised_artifact = get_artifact(project_id, artifact_id)
+            draft["markdown"] = markdown
+            draft["evidence_validation"] = draft_content["evidence_validation"]
+            draft["evidence_repair"] = draft_content["evidence_repair"]
+            draft["artifact_id"] = artifact_id
+            draft["updated_at"] = (
+                revised_artifact.updated_at if revised_artifact else utc_now_iso()
+            )
+            applied_sections.append(section_id)
+            if usage is not None:
+                feedback_usage.append({"section_id": section_id, **usage})
+    except LLMError as exc:
+        _fail_pipeline_stage(project_id, run_id, "feedback_revision", exc)
+        raise WorkflowRunFailedError(str(exc)) from exc
+
+    section_work_time = max(
+        [section_work_time]
+        + [
+            draft["updated_at"]
+            for draft in section_drafts
+            if draft.get("updated_at")
+        ]
+    )
+    _complete_agent_run(
+        run_id,
+        {
+            "applied_sections": applied_sections,
+            "comment_count": sum(len(items) for items in pending_feedback.values()),
+        },
+        token_usage={"section_calls": feedback_usage} if feedback_usage else None,
+    )
+    return FeedbackRevisionStageResult(
+        section_drafts=section_drafts,
+        section_work_time=section_work_time,
+        artifact_ids=artifact_ids,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -4162,99 +4293,21 @@ def _run_document_generation(
                 or [utc_now_iso()]
             )
 
-        # Apply per-section user feedback that arrived after the current draft
-        # of its target section. Fresh writes above already receive feedback in
-        # their prompt, so only reused drafts show up here.
-        pending_feedback = _pending_section_feedback(feedback_decisions, section_drafts)
-        if not pending_feedback:
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "feedback_revision",
-                {"applied_sections": [], "comment_count": 0},
-            )
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "feedback_revision",
-                {
-                    "section_ids": sorted(pending_feedback),
-                    "comment_count": sum(len(items) for items in pending_feedback.values()),
-                },
-            )
-            feedback_usage: list[Dict[str, Any]] = []
-            applied_sections: list[str] = []
-            for draft in section_drafts:
-                section = draft.get("section") or {}
-                section_id = str(section.get("id", ""))
-                decisions_for_section = pending_feedback.get(section_id)
-                if not decisions_for_section:
-                    continue
-                comments = [decision.answer for decision in decisions_for_section]
-                if settings.llm_enabled:
-                    markdown, usage = revise_section_with_feedback(
-                        project, brief, draft, comments
-                    )
-                else:
-                    notes = "\n".join(f"- {comment}" for comment in comments)
-                    markdown, usage = (
-                        f"{draft.get('markdown', '')}\n\nUser feedback applied:\n{notes}",
-                        None,
-                    )
-                markdown = _ensure_markdown_heading_number(
-                    markdown, section, numbered=profile.get("numbered_headings", True)
-                )
-                draft_content = {
-                    "section": section,
-                    "markdown": markdown,
-                    "sources": draft.get("sources") or [],
-                    "evidence": draft.get("evidence") or [],
-                    "evidence_validation": {
-                        "status": "stale",
-                        "reason": "section_revised_after_evidence_capture",
-                    },
-                    "evidence_repair": {
-                        "attempted": False,
-                        "succeeded": False,
-                        "reason": "section_revised_after_evidence_capture",
-                    },
-                }
-                with get_connection() as conn:
-                    artifact_ids.append(
-                        _insert_artifact(
-                            conn,
-                            project_id,
-                            "section_draft",
-                            f"Section {section_id}: feedback applied",
-                            draft_content,
-                            utc_now_iso(),
-                            agent_name,
-                        )
-                    )
-                revised_artifact = get_artifact(project_id, artifact_ids[-1])
-                draft["markdown"] = markdown
-                draft["evidence_validation"] = draft_content["evidence_validation"]
-                draft["evidence_repair"] = draft_content["evidence_repair"]
-                draft["artifact_id"] = artifact_ids[-1]
-                draft["updated_at"] = (
-                    revised_artifact.updated_at if revised_artifact else utc_now_iso()
-                )
-                applied_sections.append(section_id)
-                if usage is not None:
-                    feedback_usage.append({"section_id": section_id, **usage})
-            section_work_time = max(
-                [section_work_time]
-                + [draft["updated_at"] for draft in section_drafts if draft.get("updated_at")]
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "applied_sections": applied_sections,
-                    "comment_count": sum(len(items) for items in pending_feedback.values()),
-                },
-                token_usage={"section_calls": feedback_usage} if feedback_usage else None,
-            )
+        # Fresh writes already receive feedback in their prompt; this stage only
+        # applies comments that are newer than a reused draft.
+        feedback_result = _run_feedback_revision_stage(
+            project_id,
+            project,
+            brief,
+            profile,
+            feedback_decisions,
+            section_drafts,
+            section_work_time,
+            agent_name,
+        )
+        section_drafts = feedback_result.section_drafts
+        section_work_time = feedback_result.section_work_time
+        artifact_ids.extend(feedback_result.artifact_ids)
 
         continuity_artifact = _latest_artifact(project_id, "continuity_review")
         if continuity_artifact is not None and _is_fresh(
