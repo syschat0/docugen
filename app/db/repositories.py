@@ -2625,6 +2625,13 @@ class SectionWritingStageResult:
     artifact_ids: list[str]
 
 
+@dataclass(frozen=True)
+class WrittenSectionResult:
+    draft_content: Dict[str, Any]
+    summary: Dict[str, Any]
+    usage_entries: list[Dict[str, Any]]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -3626,6 +3633,144 @@ def _reuse_section_writing_stage(
     )
 
 
+def _write_planned_section(
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    section: Dict[str, Any],
+    previous_summary: Dict[str, Any] | None,
+    section_sources: list[Dict[str, Any]],
+    title_context: list[str],
+    feedback: list[str],
+    chapter_digests: list[Dict[str, Any]],
+    glossary: list[str],
+    profile: Dict[str, Any],
+    style_card: Dict[str, Any] | None,
+) -> WrittenSectionResult:
+    """Write one planned section and validate or repair its evidence ledger."""
+    usage_entries: list[Dict[str, Any]] = []
+    if settings.llm_enabled:
+        markdown, summary, usage = write_section_with_summary(
+            project,
+            brief,
+            section,
+            previous_summary,
+            section_sources,
+            title_context,
+            feedback=feedback,
+            chapter_digests=chapter_digests,
+            glossary=glossary,
+            profile=profile,
+            style_card=style_card,
+        )
+    else:
+        markdown, usage = _local_section_draft(
+            project, section, previous_summary, section_sources, feedback
+        ), None
+        summary = _local_section_summary(section, markdown)
+    if usage is not None:
+        usage_entries.append(usage)
+    markdown = _ensure_markdown_heading_number(
+        markdown, section, numbered=profile.get("numbered_headings", True)
+    )
+    evidence = summary.get("evidence") or []
+    evidence_validation = validate_evidence_ledger(
+        markdown=markdown,
+        evidence=evidence,
+        sources=section_sources,
+        section=section,
+    )
+    evidence_repair: Dict[str, Any] = {
+        "attempted": False,
+        "succeeded": evidence_validation.get("status") == "valid",
+    }
+    if (
+        profile.get("citations_enabled", True)
+        and evidence_validation.get("status") == "needs_review"
+    ):
+        cited_ids = evidence_validation.get("cited_source_ids") or []
+        if not cited_ids:
+            # Invalid unused ledger rows do not require another model call.
+            evidence = evidence_validation.get("valid_entries") or []
+            summary["evidence"] = evidence
+            evidence_validation = validate_evidence_ledger(
+                markdown=markdown,
+                evidence=evidence,
+                sources=section_sources,
+                section=section,
+            )
+            evidence_repair = {
+                "attempted": False,
+                "succeeded": evidence_validation.get("status") == "valid",
+                "mode": "discarded_unused_invalid_entries",
+            }
+        elif settings.llm_enabled:
+            evidence_repair = {"attempted": True, "succeeded": False}
+            try:
+                repaired_markdown, repaired_evidence, repair_usage = (
+                    repair_section_evidence(
+                        project,
+                        brief,
+                        section,
+                        markdown,
+                        section_sources,
+                        evidence_validation,
+                    )
+                )
+            except LLMError as exc:
+                evidence_repair["error"] = str(exc)
+            else:
+                markdown = _ensure_markdown_heading_number(
+                    repaired_markdown,
+                    section,
+                    numbered=profile.get("numbered_headings", True),
+                )
+                evidence = repaired_evidence
+                summary["evidence"] = evidence
+                summary["claims"] = [
+                    str(item.get("claim") or "").strip()
+                    for item in evidence
+                    if str(item.get("claim") or "").strip()
+                ][:5]
+                summary["summary"] = markdown.split("\n\n", 1)[-1][:500]
+                evidence_validation = validate_evidence_ledger(
+                    markdown=markdown,
+                    evidence=evidence,
+                    sources=section_sources,
+                    section=section,
+                )
+                evidence_repair.update(
+                    {
+                        "succeeded": evidence_validation.get("status") == "valid",
+                        "remaining_invalid_entries": evidence_validation.get(
+                            "invalid_entry_count", 0
+                        ),
+                        "remaining_unverified_citations": len(
+                            evidence_validation.get("unverified_citation_ids") or []
+                        ),
+                    }
+                )
+                if repair_usage is not None:
+                    usage_entries.append(
+                        {
+                            "section_id": str(section.get("id", "")),
+                            "evidence_repair": repair_usage,
+                        }
+                    )
+
+    return WrittenSectionResult(
+        draft_content={
+            "section": section,
+            "markdown": markdown,
+            "sources": section_sources,
+            "evidence": evidence,
+            "evidence_validation": evidence_validation,
+            "evidence_repair": evidence_repair,
+        },
+        summary=summary,
+        usage_entries=usage_entries,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -3891,128 +4036,26 @@ def _run_document_generation(
                         glossary_counts.items(), key=lambda item: -item[1]
                     )[:15]
                 ]
-                if settings.llm_enabled:
-                    markdown, summary, usage = write_section_with_summary(
-                        project,
-                        brief,
-                        section,
-                        previous_summary,
-                        section_sources,
-                        _section_title_context(section, sections, chapter_titles),
-                        feedback=section_feedback,
-                        chapter_digests=chapter_digests,
-                        glossary=glossary,
-                        profile=profile,
-                        style_card=style_card,
-                    )
-                else:
-                    markdown, usage = _local_section_draft(
-                        project, section, previous_summary, section_sources, section_feedback
-                    ), None
-                    summary = _local_section_summary(section, markdown)
-                if usage is not None:
-                    writing_usage.append(usage)
-                markdown = _ensure_markdown_heading_number(
-                    markdown, section, numbered=profile.get("numbered_headings", True)
+                written_section = _write_planned_section(
+                    project,
+                    brief,
+                    section,
+                    previous_summary,
+                    section_sources,
+                    _section_title_context(section, sections, chapter_titles),
+                    section_feedback,
+                    chapter_digests,
+                    glossary,
+                    profile,
+                    style_card,
                 )
-                evidence = summary.get("evidence") or []
-                evidence_validation = validate_evidence_ledger(
-                    markdown=markdown,
-                    evidence=evidence,
-                    sources=section_sources,
-                    section=section,
-                )
-                evidence_repair: Dict[str, Any] = {
-                    "attempted": False,
-                    "succeeded": evidence_validation.get("status") == "valid",
-                }
-                if (
-                    profile.get("citations_enabled", True)
-                    and evidence_validation.get("status") == "needs_review"
-                ):
-                    cited_ids = evidence_validation.get("cited_source_ids") or []
-                    if not cited_ids:
-                        # Invalid unused ledger rows do not require another
-                        # model call; discard them and validate the empty or
-                        # remaining valid ledger deterministically.
-                        evidence = evidence_validation.get("valid_entries") or []
-                        summary["evidence"] = evidence
-                        evidence_validation = validate_evidence_ledger(
-                            markdown=markdown,
-                            evidence=evidence,
-                            sources=section_sources,
-                            section=section,
-                        )
-                        evidence_repair = {
-                            "attempted": False,
-                            "succeeded": evidence_validation.get("status") == "valid",
-                            "mode": "discarded_unused_invalid_entries",
-                        }
-                    elif settings.llm_enabled:
-                        evidence_repair = {"attempted": True, "succeeded": False}
-                        try:
-                            repaired_markdown, repaired_evidence, repair_usage = (
-                                repair_section_evidence(
-                                    project,
-                                    brief,
-                                    section,
-                                    markdown,
-                                    section_sources,
-                                    evidence_validation,
-                                )
-                            )
-                        except LLMError as exc:
-                            evidence_repair["error"] = str(exc)
-                        else:
-                            markdown = _ensure_markdown_heading_number(
-                                repaired_markdown,
-                                section,
-                                numbered=profile.get("numbered_headings", True),
-                            )
-                            evidence = repaired_evidence
-                            summary["evidence"] = evidence
-                            summary["claims"] = [
-                                str(item.get("claim") or "").strip()
-                                for item in evidence
-                                if str(item.get("claim") or "").strip()
-                            ][:5]
-                            summary["summary"] = markdown.split("\n\n", 1)[-1][:500]
-                            evidence_validation = validate_evidence_ledger(
-                                markdown=markdown,
-                                evidence=evidence,
-                                sources=section_sources,
-                                section=section,
-                            )
-                            evidence_repair.update(
-                                {
-                                    "succeeded": evidence_validation.get("status")
-                                    == "valid",
-                                    "remaining_invalid_entries": evidence_validation.get(
-                                        "invalid_entry_count", 0
-                                    ),
-                                    "remaining_unverified_citations": len(
-                                        evidence_validation.get(
-                                            "unverified_citation_ids"
-                                        )
-                                        or []
-                                    ),
-                                }
-                            )
-                            if repair_usage is not None:
-                                writing_usage.append(
-                                    {
-                                        "section_id": str(section.get("id", "")),
-                                        "evidence_repair": repair_usage,
-                                    }
-                                )
-                draft_content = {
-                    "section": section,
-                    "markdown": markdown,
-                    "sources": section_sources,
-                    "evidence": evidence,
-                    "evidence_validation": evidence_validation,
-                    "evidence_repair": evidence_repair,
-                }
+                draft_content = written_section.draft_content
+                summary = written_section.summary
+                writing_usage.extend(written_section.usage_entries)
+                markdown = str(draft_content.get("markdown") or "")
+                evidence = draft_content.get("evidence") or []
+                evidence_validation = draft_content.get("evidence_validation") or {}
+                evidence_repair = draft_content.get("evidence_repair") or {}
                 with get_connection() as conn:
                     artifact_ids.append(
                         _insert_artifact(
