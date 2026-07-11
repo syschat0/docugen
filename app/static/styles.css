@@ -744,6 +744,20 @@ label {
   border-left-color: var(--warning);
 }
 
+.quality-toggle::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--ok);
+}
+
+.quality-toggle.review-needed::before {
+  background: var(--warning);
+}
+
 .quality-status {
   background: var(--ok-soft) !important;
 }

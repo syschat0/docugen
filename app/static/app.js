@@ -7,6 +7,7 @@ const state = {
   draftView: "rendered",
   language: localStorage.getItem("docugenLanguage") || "en",
   theme: localStorage.getItem("docugenTheme") || "pastel",
+  qualityOpen: localStorage.getItem("docugenQualityPanel") === "open",
   sidebarCollapsed:
     (localStorage.getItem("docugenSidebar") ||
       (window.matchMedia("(max-width: 920px)").matches ? "collapsed" : "open")) ===
@@ -650,6 +651,7 @@ const els = {
   pipelinePanel: document.querySelector("#pipelinePanel"),
   pipelineSummaryText: document.querySelector("#pipelineSummaryText"),
   qualityPanel: document.querySelector("#qualityPanel"),
+  qualityToggle: document.querySelector("#qualityToggle"),
   qualityStatus: document.querySelector("#qualityStatus"),
   qualityStrongSources: document.querySelector("#qualityStrongSources"),
   qualityLowSources: document.querySelector("#qualityLowSources"),
@@ -1084,11 +1086,27 @@ function renderQuality() {
   const quality = state.quality;
   if (!quality || !latestDraft()) {
     els.qualityPanel.classList.add("hidden");
+    els.qualityToggle?.classList.add("hidden");
     return;
   }
 
-  els.qualityPanel.classList.remove("hidden", "review-needed", "ready");
   const needsReview = quality.status === "review_needed";
+  // The panel stays collapsed behind this toggle; the status strip, detail
+  // status, and run button already surface "review needed" on their own.
+  if (els.qualityToggle) {
+    els.qualityToggle.classList.remove("hidden", "review-needed", "ready");
+    els.qualityToggle.classList.add(needsReview ? "review-needed" : "ready");
+    const statusText = t(needsReview ? "qualityReviewNeeded" : "qualityReady");
+    const warningCount = (quality.warnings || []).length;
+    els.qualityToggle.textContent =
+      needsReview && warningCount
+        ? `${t("qualitySummary")} · ${statusText} ${warningCount}`
+        : `${t("qualitySummary")} · ${statusText}`;
+    els.qualityToggle.setAttribute("aria-expanded", String(state.qualityOpen));
+  }
+
+  els.qualityPanel.classList.remove("hidden", "review-needed", "ready");
+  els.qualityPanel.classList.toggle("hidden", !state.qualityOpen);
   els.qualityPanel.classList.add(needsReview ? "review-needed" : "ready");
   els.qualityStatus.textContent = t(needsReview ? "qualityReviewNeeded" : "qualityReady");
   if (needsReview) {
@@ -2858,6 +2876,12 @@ els.draftViewToggle.addEventListener("click", () => {
   renderDraftPreview();
 });
 
+els.qualityToggle?.addEventListener("click", () => {
+  state.qualityOpen = !state.qualityOpen;
+  localStorage.setItem("docugenQualityPanel", state.qualityOpen ? "open" : "collapsed");
+  renderQuality();
+});
+
 els.versionsButton?.addEventListener("click", () => {
   state.versionsOpen = !state.versionsOpen;
   renderVersions();
@@ -2923,13 +2947,21 @@ async function startWritingRun() {
   const project = selectedProject();
   if (!project) return;
 
+  // "Improve draft" mode: without force_from every cached stage is reused and
+  // the run is a no-op, so force the review/revision tail to actually re-run.
+  const improveMode = Boolean(
+    latestDraft() &&
+      (project.status === "review_needed" || state.quality?.status === "review_needed"),
+  );
+  const startPhase = improveMode ? "continuity_review" : "intake";
+
   setRunButtonRunning(true);
-  resetProgressForRun("intake");
+  resetProgressForRun(startPhase);
 
   try {
     const result = await api(`/projects/${project.id}/run`, {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(improveMode ? { force_from: startPhase } : {}),
     });
     state.selectedProjectId = result.project.id;
     showToast(result.message || t("writingInProgress"));
