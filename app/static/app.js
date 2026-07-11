@@ -19,7 +19,7 @@ const state = {
   projectSettings: null,
   quality: null,
   viewDraftId: null,
-  compareDraftId: null,
+  compareSelection: [],
   versionsOpen: false,
   progress: null,
   appliedPhase: null,
@@ -51,6 +51,7 @@ const translations = {
     compareClose: "Close comparison",
     compareConditions: "Generation condition changes",
     compareNoChanges: "These versions are identical.",
+    comparePickSecond: "Select one more version to compare",
     compareSummary: "{changed} changed · {added} added · {removed} removed",
     compareTitle: "Comparing v{from} → v{to}",
     completed: "completed",
@@ -345,6 +346,7 @@ const translations = {
     compareClose: "비교 닫기",
     compareConditions: "생성 조건 변경",
     compareNoChanges: "두 버전의 내용이 동일합니다.",
+    comparePickSecond: "비교할 버전을 하나 더 선택하세요",
     compareSummary: "변경 {changed} · 추가 {added} · 삭제 {removed}",
     compareTitle: "v{from} → v{to} 비교",
     completed: "완료",
@@ -2421,7 +2423,7 @@ function renderDraftPreview() {
   renderVersions();
   updateVersionsVisibility();
   if (!draft) {
-    state.compareDraftId = null;
+    state.compareSelection = [];
     els.draftStatus.textContent = t("noDraft");
     if (els.formViewButton) {
       els.formViewButton.disabled = true;
@@ -2438,14 +2440,13 @@ function renderDraftPreview() {
     els.formViewButton.disabled = false;
   }
 
-  const comparing = compareDraft();
-  if (state.compareDraftId && !comparing) {
-    // Target went stale (removed, or now equals the viewed version): reset quietly.
-    state.compareDraftId = null;
-  }
-  if (comparing) {
+  // compareDrafts() drops stale ids; two valid selections turn on compare mode.
+  const compareSelected = compareDrafts();
+  if (compareSelected.length === 2) {
     const [fromDraft, toDraft] =
-      comparing.version < draft.version ? [comparing, draft] : [draft, comparing];
+      compareSelected[0].version < compareSelected[1].version
+        ? [compareSelected[0], compareSelected[1]]
+        : [compareSelected[1], compareSelected[0]];
     els.draftStatus.textContent = `v${fromDraft.version} ↔ v${toDraft.version}`;
     els.draftToc.classList.add("hidden");
     els.draftToc.innerHTML = "";
@@ -2519,7 +2520,13 @@ function renderVersions() {
   }
 
   const viewed = currentDraft();
-  const comparingDraft = compareDraft();
+  const selectedIds = compareDrafts().map((draft) => draft.id);
+  if (selectedIds.length === 1) {
+    const hint = document.createElement("p");
+    hint.className = "item-meta";
+    hint.textContent = t("comparePickSecond");
+    els.versionList.append(hint);
+  }
   for (const draft of drafts) {
     const isLatest = draft.id === drafts[0].id;
     const isViewing = viewed && draft.id === viewed.id;
@@ -2527,10 +2534,7 @@ function renderVersions() {
     const row = document.createElement("div");
     row.className = "version-item";
     row.classList.toggle("viewing", Boolean(isViewing));
-    row.classList.toggle(
-      "comparing",
-      Boolean(comparingDraft && draft.id === comparingDraft.id),
-    );
+    row.classList.toggle("comparing", selectedIds.includes(draft.id));
 
     const meta = document.createElement("div");
     meta.className = "version-meta";
@@ -2558,7 +2562,7 @@ function renderVersions() {
     viewBtn.textContent = t("viewVersion");
     viewBtn.disabled = Boolean(isViewing);
     viewBtn.addEventListener("click", () => {
-      state.compareDraftId = null;
+      state.compareSelection = [];
       state.viewDraftId = draft.id;
       renderDraftPreview();
     });
@@ -2567,9 +2571,8 @@ function renderVersions() {
     compareBtn.type = "button";
     compareBtn.className = "secondary";
     compareBtn.textContent = t("compare");
-    compareBtn.disabled = Boolean(isViewing);
     compareBtn.addEventListener("click", () => {
-      state.compareDraftId = draft.id;
+      toggleCompareSelection(draft.id);
       renderDraftPreview();
     });
     actions.append(compareBtn);
@@ -2595,7 +2598,7 @@ async function restoreVersion(artifactId) {
       body: JSON.stringify({}),
     });
     state.viewDraftId = null;
-    state.compareDraftId = null;
+    state.compareSelection = [];
     showToast(t("restoredToast"));
     await loadArtifacts();
     renderDraftPreview();
@@ -2604,16 +2607,29 @@ async function restoreVersion(artifactId) {
   }
 }
 
-// The version currently being compared against the viewed draft, or null when
-// compare mode is inactive. Compare mode needs a stored target that still
-// exists and differs from the version on screen.
-function compareDraft() {
-  if (!state.compareDraftId) return null;
+// The drafts currently picked for comparison (0-2). Also prunes selections that
+// no longer exist so a reload or restore can't leave a dangling id behind.
+function compareDrafts() {
   const drafts = draftVersions();
-  const target = drafts.find((draft) => draft.id === state.compareDraftId);
-  const viewed = currentDraft();
-  if (!target || !viewed || target.id === viewed.id) return null;
-  return target;
+  const valid = state.compareSelection.filter((id) => drafts.some((draft) => draft.id === id));
+  if (valid.length !== state.compareSelection.length) {
+    state.compareSelection = valid;
+  }
+  return valid.map((id) => drafts.find((draft) => draft.id === id));
+}
+
+// Toggles a draft in the comparison set, keeping at most the two most recent
+// picks so a third selection slides the window forward.
+function toggleCompareSelection(id) {
+  const index = state.compareSelection.indexOf(id);
+  if (index >= 0) {
+    state.compareSelection.splice(index, 1);
+    return;
+  }
+  state.compareSelection.push(id);
+  while (state.compareSelection.length > 2) {
+    state.compareSelection.shift();
+  }
 }
 
 // Splits markdown into sections keyed on their heading. A section spans from a
@@ -2740,13 +2756,11 @@ function tokenizeWords(text) {
   return text.split(/(\s+)/).filter(Boolean);
 }
 
-// Produces render parts ({type, text}) for two section bodies. Lines are
-// diffed first; a deletion run immediately followed by an insertion run is a
-// replacement, so it is re-diffed at the word level for a tighter highlight.
-function diffSectionBody(baseBody, targetBody) {
-  const toLineTokens = (text) => text.split("\n").map((line) => line + "\n");
-  const lineDiff = lcsDiff(toLineTokens(baseBody), toLineTokens(targetBody));
-
+// Turns a line-level lcsDiff into aligned side-by-side rows. Each row carries a
+// left cell (same/del parts) and a right cell (same/ins parts). A deletion run
+// immediately followed by an insertion run is a replacement, re-diffed at the
+// word level and split so shared words stay put while edits highlight per side.
+function alignDiffRows(lineDiff) {
   const runs = [];
   for (const tok of lineDiff) {
     const last = runs[runs.length - 1];
@@ -2754,33 +2768,63 @@ function diffSectionBody(baseBody, targetBody) {
     else runs.push({ type: tok.type, text: tok.token });
   }
 
-  const parts = [];
-  const pushPart = (type, text) => {
+  const pushPart = (cell, type, text) => {
     if (!text) return;
-    const last = parts[parts.length - 1];
+    const last = cell[cell.length - 1];
     if (last && last.type === type) last.text += text;
-    else parts.push({ type, text });
+    else cell.push({ type, text });
   };
 
+  const rows = [];
   for (let r = 0; r < runs.length; r++) {
     const run = runs[r];
     const next = runs[r + 1];
-    if (run.type === "del" && next && next.type === "ins") {
+    if (run.type === "same") {
+      rows.push({
+        kind: "same",
+        left: [{ type: "same", text: run.text }],
+        right: [{ type: "same", text: run.text }],
+      });
+    } else if (run.type === "del" && next && next.type === "ins") {
       const wordDiff = lcsDiff(tokenizeWords(run.text), tokenizeWords(next.text));
-      for (const w of wordDiff) pushPart(w.type, w.token);
+      const left = [];
+      const right = [];
+      for (const w of wordDiff) {
+        if (w.type === "same") {
+          pushPart(left, "same", w.token);
+          pushPart(right, "same", w.token);
+        } else if (w.type === "del") {
+          pushPart(left, "del", w.token);
+        } else {
+          pushPart(right, "ins", w.token);
+        }
+      }
+      rows.push({ kind: "change", left, right });
       r++;
-      continue;
+    } else if (run.type === "del") {
+      rows.push({ kind: "del", left: [{ type: "del", text: run.text }], right: [] });
+    } else {
+      rows.push({ kind: "ins", left: [], right: [{ type: "ins", text: run.text }] });
     }
-    pushPart(run.type, run.text);
   }
 
-  // Drop the phantom trailing newline that toLineTokens appended.
-  if (parts.length) {
-    const last = parts[parts.length - 1];
-    last.text = last.text.replace(/\n$/, "");
-    if (!last.text) parts.pop();
+  // Drop the phantom trailing newline that line tokenization appended.
+  const lastRow = rows[rows.length - 1];
+  if (lastRow) {
+    for (const cell of [lastRow.left, lastRow.right]) {
+      const lastPart = cell[cell.length - 1];
+      if (!lastPart) continue;
+      lastPart.text = lastPart.text.replace(/\n$/, "");
+      if (!lastPart.text) cell.pop();
+    }
   }
-  return parts;
+  return rows;
+}
+
+// Aligned rows for a changed section pair, diffing the bodies line by line.
+function diffSectionRows(baseBody, targetBody) {
+  const toLineTokens = (text) => text.split("\n").map((line) => line + "\n");
+  return alignDiffRows(lcsDiff(toLineTokens(baseBody), toLineTokens(targetBody)));
 }
 
 const COMPARE_CONDITION_KEYS = [
@@ -2826,7 +2870,34 @@ function compareConditionRows(fromConditions, toConditions) {
   return rows;
 }
 
-function buildCompareSectionBlock(status, heading, parts) {
+// One grid cell: same parts as text nodes, del/ins parts wrapped so only the
+// relevant side highlights. An empty cell is dimmed to signal "no counterpart".
+function buildCompareCell(parts) {
+  const cell = document.createElement("div");
+  cell.className = "compare-cell";
+  if (!parts || parts.length === 0) {
+    cell.classList.add("empty");
+    return cell;
+  }
+  for (const part of parts) {
+    if (part.type === "same") {
+      cell.append(document.createTextNode(part.text));
+    } else if (part.type === "del") {
+      const del = document.createElement("del");
+      del.textContent = part.text;
+      cell.append(del);
+    } else {
+      const ins = document.createElement("ins");
+      ins.textContent = part.text;
+      cell.append(ins);
+    }
+  }
+  return cell;
+}
+
+// A section block: status badge + heading, a muted v{from}/v{to} column header,
+// then the aligned rows laid out as a two-column grid.
+function buildCompareGridBlock(status, heading, rows, fromVersion, toVersion) {
   const details = document.createElement("details");
   details.className = "compare-section";
   details.open = true;
@@ -2842,22 +2913,20 @@ function buildCompareSectionBlock(status, heading, parts) {
   summary.append(badge, label);
   details.append(summary);
 
-  const body = document.createElement("div");
-  body.className = "compare-body";
-  for (const part of parts) {
-    if (part.type === "same") {
-      body.append(document.createTextNode(part.text));
-    } else if (part.type === "del") {
-      const del = document.createElement("del");
-      del.textContent = part.text;
-      body.append(del);
-    } else {
-      const ins = document.createElement("ins");
-      ins.textContent = part.text;
-      body.append(ins);
-    }
+  const grid = document.createElement("div");
+  grid.className = "compare-grid";
+  const headLeft = document.createElement("div");
+  headLeft.className = "compare-col-head";
+  headLeft.textContent = `v${fromVersion}`;
+  const headRight = document.createElement("div");
+  headRight.className = "compare-col-head";
+  headRight.textContent = `v${toVersion}`;
+  grid.append(headLeft, headRight);
+
+  for (const row of rows) {
+    grid.append(buildCompareCell(row.left), buildCompareCell(row.right));
   }
-  details.append(body);
+  details.append(grid);
   return details;
 }
 
@@ -2877,7 +2946,7 @@ function renderCompareView(from, to) {
   closeBtn.className = "secondary";
   closeBtn.textContent = t("compareClose");
   closeBtn.addEventListener("click", () => {
-    state.compareDraftId = null;
+    state.compareSelection = [];
     renderDraftPreview();
   });
   banner.append(bannerTitle, closeBtn);
@@ -2940,7 +3009,13 @@ function renderCompareView(from, to) {
     if (emittedBase.has(section) || pairByBase.get(section)) return;
     emittedBase.add(section);
     container.append(
-      buildCompareSectionBlock("removed", section.heading, [{ type: "del", text: section.body }]),
+      buildCompareGridBlock(
+        "removed",
+        section.heading,
+        [{ kind: "del", left: [{ type: "del", text: section.body }], right: [] }],
+        from.version,
+        to.version,
+      ),
     );
   };
 
@@ -2948,7 +3023,13 @@ function renderCompareView(from, to) {
     const pair = pairByTarget.get(target);
     if (!pair) {
       container.append(
-        buildCompareSectionBlock("added", target.heading, [{ type: "ins", text: target.body }]),
+        buildCompareGridBlock(
+          "added",
+          target.heading,
+          [{ kind: "ins", left: [], right: [{ type: "ins", text: target.body }] }],
+          from.version,
+          to.version,
+        ),
       );
       continue;
     }
@@ -2963,10 +3044,12 @@ function renderCompareView(from, to) {
       unchangedTitles.push(pair.target.heading || "…");
     } else {
       container.append(
-        buildCompareSectionBlock(
+        buildCompareGridBlock(
           "changed",
           pair.target.heading,
-          diffSectionBody(pair.base.body, pair.target.body),
+          diffSectionRows(pair.base.body, pair.target.body),
+          from.version,
+          to.version,
         ),
       );
     }
@@ -3409,7 +3492,7 @@ els.addArtifactToggle.addEventListener("click", () => {
 });
 
 els.draftViewToggle.addEventListener("click", () => {
-  state.compareDraftId = null;
+  state.compareSelection = [];
   state.draftView = state.draftView === "rendered" ? "raw" : "rendered";
   renderDraftPreview();
 });

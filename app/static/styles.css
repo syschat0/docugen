@@ -1380,21 +1380,46 @@ label {
   color: var(--warning);
 }
 
-.compare-body {
+.compare-grid {
   margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: var(--border-thin);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.compare-col-head {
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 10px;
+}
+
+.compare-cell {
+  background: var(--surface);
+  padding: 6px 10px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.6;
   color: var(--text);
   font-size: 13px;
-  overflow-x: auto;
 }
 
-.compare-body ins {
+.compare-cell.empty {
+  background: var(--surface-muted);
+  opacity: 0.5;
+}
+
+.compare-cell ins {
   background: rgba(46, 160, 67, 0.18);
   text-decoration: none;
 }
 
-.compare-body del {
+.compare-cell del {
   background: rgba(248, 81, 73, 0.18);
   text-decoration: line-through;
 }
