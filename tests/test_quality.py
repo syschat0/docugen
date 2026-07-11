@@ -276,6 +276,47 @@ def test_structure_quality_detects_list_heavy_and_heading_problems():
     assert stats["heading_issue_count"] == 1
 
 
+def test_structure_quality_splits_sentences_after_emphasis_and_quotes():
+    # Terminal punctuation wrapped in markdown emphasis, quotes, or brackets
+    # used to hide the sentence boundary, merging short sentences into one
+    # false "long sentence".
+    paragraph = (
+        "첫 번째 문장은 검토 화면에서 그대로 확인할 수 있도록 마크다운 **굵은 강조 표시로 끝납니다.** "
+        '두 번째 문장은 검토자가 초안에 남긴 "직접 인용 표현을 담은 채로 끝납니다." '
+        "세 번째 문장은 독자를 위한 부가 설명을 담은 (괄호 안 보충 설명으로 끝납니다.) "
+        "네 번째 문장은 아무 장식 없이 평범한 서술형 표현으로 끝납니다."
+    )
+    stats = structure_quality_stats(
+        [
+            {
+                "section": {"id": "1.1", "title": "Styled endings"},
+                "markdown": f"### Styled endings\n\n{paragraph}",
+            }
+        ],
+        document_type="report",
+    )
+    assert stats["long_sentence_count"] == 0
+    assert stats["issues"] == []
+
+
+def test_structure_quality_does_not_treat_attached_list_as_one_sentence():
+    # A list glued to its lead-in line without a blank line used to be joined
+    # into one giant unpunctuated "sentence".
+    markdown = (
+        "### 점검 항목\n\n"
+        "배포 전에 다음 항목을 차례대로 점검합니다:\n"
+        "- 첫 번째 항목은 운영 로그 수집 설정이 켜져 있는지 확인합니다\n"
+        "- 두 번째 항목은 데이터베이스 백업 주기가 요구 사항과 맞는지 확인합니다\n"
+        "- 세 번째 항목은 관리자 접근 권한이 최소한으로 부여되어 있는지 확인합니다\n"
+        "- 네 번째 항목은 저장 공간 여유가 경고 기준을 넘는지 확인합니다\n"
+    )
+    stats = structure_quality_stats(
+        [{"section": {"id": "1.1", "title": "점검 항목"}, "markdown": markdown}],
+        document_type="report",
+    )
+    assert stats["long_sentence_count"] == 0
+
+
 def test_report_bookends_are_required_only_for_long_form_profiles():
     paragraph = (
         "This section develops one part of the analysis with enough context for the "
@@ -328,6 +369,29 @@ def test_high_stakes_quality_requires_strong_sources_and_honors_review_issues():
     assert summary["review"]["revision_targets"] == ["1.1"]
 
 
+def test_review_targets_carry_reviewer_notes():
+    summary = build_quality_summary(
+        project_text="기술 개요",
+        sources=[],
+        section_drafts=[{"markdown": "### A\n\n본문 내용."}],
+        continuity={
+            "verdict": "revise",
+            "issues": [
+                {"affected_ids": ["1.1"], "description": "도입부와 결론의 주장이 상충합니다."}
+            ],
+            "revision_targets": ["1.1"],
+        },
+        rubric={"verdict": "pass", "issues": [], "criteria": []},
+    )
+    assert summary["review"]["target_issues"] == [
+        {
+            "type": "review_target",
+            "section_ids": ["1.1"],
+            "excerpts": ["도입부와 결론의 주장이 상충합니다."],
+        }
+    ]
+
+
 def test_clean_quality_can_be_ready():
     summary = build_quality_summary(
         project_text="기술 개요",
@@ -348,3 +412,49 @@ def test_clean_quality_can_be_ready():
     )
     assert summary["status"] == "ready"
     assert summary["warnings"] == []
+
+
+def test_short_paragraph_with_many_short_sentences_is_not_dense():
+    # Six short sentences in a ~100-char paragraph are well paced prose, not
+    # a dense paragraph; the sentence-count rule needs paragraph length too.
+    paragraph = (
+        "짧은 문장은 좋습니다. 읽기도 쉽습니다. 흐름도 빠릅니다. "
+        "독자는 지치지 않습니다. 핵심이 잘 보입니다. 그래서 권장합니다."
+    )
+    stats = structure_quality_stats(
+        [
+            {
+                "section": {"id": "1.1", "title": "리듬"},
+                "markdown": f"### 리듬\n\n{paragraph}",
+            }
+        ],
+        document_type="blog_post",
+    )
+    assert stats["long_paragraph_count"] == 0
+
+
+def test_review_target_notes_are_grouped_per_issue():
+    summary = build_quality_summary(
+        project_text="기술 개요",
+        sources=[],
+        section_drafts=[{"markdown": "### A\n\n본문 내용."}],
+        continuity={
+            "verdict": "revise",
+            "issues": [
+                {
+                    "affected_ids": ["1.1", "1.2"],
+                    "description": "용어가 섹션마다 다릅니다.",
+                }
+            ],
+            "revision_targets": ["1.1", "1.2", "2.1"],
+        },
+        rubric={"verdict": "pass", "issues": [], "criteria": []},
+    )
+    assert summary["review"]["target_issues"] == [
+        {
+            "type": "review_target",
+            "section_ids": ["1.1", "1.2"],
+            "excerpts": ["용어가 섹션마다 다릅니다."],
+        },
+        {"type": "review_target", "section_ids": ["2.1"], "excerpts": []},
+    ]

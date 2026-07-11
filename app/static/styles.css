@@ -830,6 +830,22 @@ label {
   gap: 6px 12px;
 }
 
+.quality-issue-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  margin-left: -6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  cursor: help;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .quality-issue-actions {
   display: inline-flex;
   flex-wrap: wrap;

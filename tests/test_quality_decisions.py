@@ -106,6 +106,44 @@ def test_decision_does_not_carry_to_a_new_draft_version(quality_project):
     assert "decision" not in current["writing_quality"]["issues"][0]
 
 
+def test_review_target_notes_survive_decision_overlay(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        session, "settings", SimpleNamespace(database_path=tmp_path / "notes.sqlite3")
+    )
+    session.init_db()
+    project = repositories.create_project(
+        ProjectCreate(title="Target notes", initial_request="Keep reviewer notes")
+    )
+    repositories.set_project_status(project.id, "review_needed", "final_merge")
+    stored = _stored_quality()
+    stored["review"] = {
+        "issue_count": 1,
+        "revision_targets": ["2.1"],
+        "target_issues": [
+            {
+                "type": "review_target",
+                "section_ids": ["2.1"],
+                "excerpts": ["결론이 본문과 상충합니다."],
+            }
+        ],
+    }
+    repositories.create_artifact(
+        project.id,
+        ArtifactCreate(
+            type="draft",
+            title="Draft",
+            content={"format": "markdown", "markdown": "# Draft", "quality": stored},
+        ),
+    )
+
+    summary = repositories.get_project_quality_summary(project.id)
+
+    target = summary["review"]["target_issues"][0]
+    assert target["section_ids"] == ["2.1"]
+    assert target["excerpts"] == ["결론이 본문과 상충합니다."]
+    assert target["issue_key"]
+
+
 def test_unknown_issue_key_is_rejected(quality_project):
     project_id, _draft_id = quality_project
     with pytest.raises(repositories.UnknownQualityIssueError):

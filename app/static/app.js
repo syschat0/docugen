@@ -224,6 +224,7 @@ const translations = {
     writingIssue_unsupported_overclaim: "Unsupported absolute claim ({sections}): {excerpt}",
     writingRepairSummary: "Automatic sentence repair improved {repaired} of {attempted} targeted sections.",
     qualityReviewTarget: "Review target section {sections}",
+    qualityReviewTargetDetail: "Review target section {sections}: {excerpt}",
     jumpToQualityIssue: "Jump to section {id}",
     qualityIssueNotFound: "The target section could not be located in the latest draft.",
     acknowledgeIssue: "Reviewed",
@@ -235,7 +236,27 @@ const translations = {
     issueDecisionSaved: "Quality issue decision saved.",
     issueDecisionCleared: "Quality issue decision removed.",
     requestIssueFix: "Request fix",
-    qualityFeedbackTemplate: "Resolve this quality issue in section {sections}: {issue}\nProblem excerpt: {excerpt}",
+    qualityFeedbackTemplate: "Please fix this quality issue.\n- Issue: {issue}\n- Problem excerpt: {excerpt}\n- Related sections: {sections}",
+    issueName_duplicate: "Possible repetition",
+    issueName_possible_contradiction: "Possible contradiction",
+    issueName_unsupported_overclaim: "Unsupported absolute claim",
+    issueName_long_sentence: "Long sentence",
+    issueName_long_paragraph: "Dense paragraph",
+    issueName_list_heavy: "List-heavy section",
+    issueName_heading_structure: "Heading structure",
+    issueName_missing_introduction: "Introduction not identified",
+    issueName_missing_conclusion: "Conclusion not identified",
+    issueName_review_target: "Reviewer-flagged issue",
+    issueHelp_duplicate: "Nearly identical sentences appear in more than one place. Consider merging or trimming one side.",
+    issueHelp_possible_contradiction: "Two sentences read as opposite claims about the same topic. Check whether they actually conflict.",
+    issueHelp_unsupported_overclaim: "An absolute claim (always, never, the only) has no citation. Add evidence or soften the wording.",
+    issueHelp_long_sentence: "One sentence exceeds the length guideline for this document type. Splitting it into two or three makes it easier to read.",
+    issueHelp_long_paragraph: "One paragraph is long and packed with sentences, leaving no resting point. Split it by topic.",
+    issueHelp_list_heavy: "Most of this section is bullet lists. Keep only the key items as a list and turn the rest into prose.",
+    issueHelp_heading_structure: "This section does not have exactly one heading. Tidy the heading hierarchy.",
+    issueHelp_missing_introduction: "No opening section reads as an introduction. Consider adding or renaming one.",
+    issueHelp_missing_conclusion: "No closing section reads as a conclusion. Consider adding or renaming one.",
+    issueHelp_review_target: "The AI reviewer recommended rewriting these sections. Running Improve Draft revises them first.",
     saveAndImproveSection: "Save & improve section",
     sectionImprovementStarted: "Feedback saved. Improving section {id} now.",
     structureIssue_long_sentence: "Long sentence ({sections}): {excerpt}",
@@ -355,6 +376,7 @@ const translations = {
     writingIssue_unsupported_overclaim: "근거 없는 단정 ({sections}): {excerpt}",
     writingRepairSummary: "문장 자동 보정 대상 {attempted}개 중 {repaired}개 섹션을 개선했습니다.",
     qualityReviewTarget: "검토 대상 섹션 {sections}",
+    qualityReviewTargetDetail: "검토 대상 섹션 {sections}: {excerpt}",
     jumpToQualityIssue: "섹션 {id}로 이동",
     qualityIssueNotFound: "최신 초안에서 대상 섹션을 찾을 수 없습니다.",
     acknowledgeIssue: "확인 완료",
@@ -366,7 +388,27 @@ const translations = {
     issueDecisionSaved: "품질 이슈 처리를 저장했습니다.",
     issueDecisionCleared: "품질 이슈 처리를 해제했습니다.",
     requestIssueFix: "수정 요청",
-    qualityFeedbackTemplate: "섹션 {sections}의 품질 이슈를 수정하세요: {issue}\n문제 문장: {excerpt}",
+    qualityFeedbackTemplate: "다음 품질 이슈를 수정해 주세요.\n- 이슈 내용: {issue}\n- 문제 문장: {excerpt}\n- 관련 섹션: {sections}",
+    issueName_duplicate: "반복 가능성",
+    issueName_possible_contradiction: "상반된 진술 가능성",
+    issueName_unsupported_overclaim: "근거 없는 단정",
+    issueName_long_sentence: "긴 문장",
+    issueName_long_paragraph: "조밀한 문단",
+    issueName_list_heavy: "목록 편중",
+    issueName_heading_structure: "제목 구조",
+    issueName_missing_introduction: "도입부 확인 필요",
+    issueName_missing_conclusion: "결론부 확인 필요",
+    issueName_review_target: "검토 지적 사항",
+    issueHelp_duplicate: "거의 같은 문장이 두 곳 이상에서 반복됩니다. 한쪽을 줄이거나 합치는 것을 검토하세요.",
+    issueHelp_possible_contradiction: "같은 주제를 반대로 서술한 것처럼 읽히는 두 문장이 있습니다. 실제 모순인지 확인해 주세요.",
+    issueHelp_unsupported_overclaim: "'항상·절대·유일' 같은 단정 표현에 인용 근거가 없습니다. 근거를 붙이거나 표현을 완화하세요.",
+    issueHelp_long_sentence: "한 문장이 문서 유형별 기준 길이를 넘습니다. 두세 문장으로 나누면 읽기 쉬워집니다.",
+    issueHelp_long_paragraph: "한 문단이 길고 문장이 많아 쉬어갈 지점이 없습니다. 주제 단위로 문단을 나눠 보세요.",
+    issueHelp_list_heavy: "섹션 대부분이 목록으로 구성되어 있습니다. 핵심만 목록으로 남기고 나머지는 문장으로 풀어 보세요.",
+    issueHelp_heading_structure: "섹션의 제목 개수가 기준(1개)과 다릅니다. 제목 계층을 정리해 주세요.",
+    issueHelp_missing_introduction: "문서 앞부분에서 도입부 성격의 섹션을 찾지 못했습니다. 도입 섹션을 추가하거나 제목을 조정해 보세요.",
+    issueHelp_missing_conclusion: "문서 끝부분에서 결론 성격의 섹션을 찾지 못했습니다. 마무리 섹션을 추가하거나 제목을 조정해 보세요.",
+    issueHelp_review_target: "AI 검토자가 다시 쓰기를 권장한 섹션입니다. '문서 개선'을 실행하면 우선적으로 수정됩니다.",
     saveAndImproveSection: "저장 후 섹션 개선",
     sectionImprovementStarted: "피드백을 저장했습니다. 섹션 {id} 개선을 시작합니다.",
     structureIssue_long_sentence: "긴 문장 ({sections}): {excerpt}",
@@ -1159,7 +1201,7 @@ function renderQuality() {
     if (linkedSections.has(String(sectionId))) continue;
     appendQualityIssueLink(
       reviewIssue,
-      "qualityReviewTarget",
+      (reviewIssue.excerpts || [])[0] ? "qualityReviewTargetDetail" : "qualityReviewTarget",
       linkedSections,
     );
   }
@@ -1197,12 +1239,14 @@ function appendQualityIssueLink(issue, labelKey, linkedSections) {
     sections,
     excerpt: (issue.excerpts || [""])[0],
   });
+  const help = t(`issueHelp_${issue.type}`);
   const item = document.createElement("li");
   item.className = "quality-writing-detail";
   const decision = issue.decision || null;
   if (decision?.decision) item.classList.add(`quality-${decision.decision}`);
   if (!sectionId) {
     item.textContent = label;
+    item.title = help;
   } else {
     const row = document.createElement("div");
     row.className = "quality-issue-row";
@@ -1214,6 +1258,13 @@ function appendQualityIssueLink(issue, labelKey, linkedSections) {
     button.setAttribute("aria-label", `${label}. ${button.title}`);
     button.addEventListener("click", () => focusQualityIssue(issue));
     row.append(button);
+    const helpBadge = document.createElement("span");
+    helpBadge.className = "quality-issue-help";
+    helpBadge.textContent = "?";
+    helpBadge.title = help;
+    helpBadge.setAttribute("aria-label", help);
+    helpBadge.setAttribute("role", "img");
+    row.append(helpBadge);
     const canRequestFix = hasStoredSectionDraft(sectionId);
     if (canRequestFix || (issue.issue_key && issue.type !== "review_target")) {
       const actions = document.createElement("span");
@@ -1223,7 +1274,7 @@ function appendQualityIssueLink(issue, labelKey, linkedSections) {
         fix.type = "button";
         fix.className = "quality-decision-action quality-fix-action";
         fix.textContent = t("requestIssueFix");
-        fix.addEventListener("click", () => openQualityIssueFeedback(issue, label));
+        fix.addEventListener("click", () => openQualityIssueFeedback(issue));
         actions.append(fix);
       }
       if (issue.issue_key && issue.type !== "review_target" && decision?.decision) {
@@ -1389,7 +1440,7 @@ async function focusQualityIssue(issue) {
   highlightQualityLocation(location);
 }
 
-async function openQualityIssueFeedback(issue, issueLabel) {
+async function openQualityIssueFeedback(issue) {
   const location = await prepareQualityIssueLocation(issue);
   if (!location) {
     showToast(t("qualityIssueNotFound"), true);
@@ -1397,9 +1448,9 @@ async function openQualityIssueFeedback(issue, issueLabel) {
   }
   highlightQualityLocation(location);
   const comment = t("qualityFeedbackTemplate", {
-    sections: (issue.section_ids || []).join(", ") || location.sectionId,
-    issue: issueLabel,
+    issue: t(`issueName_${issue.type}`),
     excerpt: (issue.excerpts || [""])[0] || "-",
+    sections: (issue.section_ids || []).map(String).join(", ") || location.sectionId,
   });
   const panel = await toggleSectionFeedbackPanel(
     location.sectionId,

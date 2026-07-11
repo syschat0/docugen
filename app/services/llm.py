@@ -2178,6 +2178,11 @@ Check for:
 - Broken logical flow between adjacent sections
 
 Put the ids of sections that need rewriting in revision_targets.
+Each issue must be an object like
+{{"affected_ids": ["1.1"], "description": "what is wrong and how to fix it"}}.
+Report only actual problems in issues: if the sections read well, return an
+empty issues list. Praise and neutral observations belong in notes, never in
+issues or revision_targets.
 
 Return this JSON shape:
 {{
@@ -2186,6 +2191,10 @@ Return this JSON shape:
   "revision_targets": [],
   "notes": ""
 }}
+
+Write every "description" and "notes" value in the SAME LANGUAGE as the section
+titles and summaries above (a Korean document gets Korean descriptions),
+regardless of the language of these instructions.
 """,
     )
 
@@ -2221,12 +2230,22 @@ Check for:
 - Different terms used for the same concept across chapters
 - Chapters that assume content a later chapter introduces
 
+Each issue must be an object like
+{{"affected_ids": ["2"], "description": "what is wrong and how to fix it"}}.
+Report only actual problems in issues: if the chapters read well, return an
+empty issues list. Praise and neutral observations belong in notes, never in
+issues.
+
 Return this JSON shape:
 {{
   "verdict": "pass",
   "issues": [],
   "notes": ""
 }}
+
+Write every "description" and "notes" value in the SAME LANGUAGE as the chapter
+titles and digests above (a Korean document gets Korean descriptions),
+regardless of the language of these instructions.
 """,
     )
 
@@ -2359,6 +2378,11 @@ Chapter {chapter_id} sections:
 Grade strictly against the rubric. For every criterion scored 3 or lower,
 add one concrete issue that names the section id and says what to change.
 Put the ids of sections that need rewriting in revision_targets.
+Each issue must be an object like
+{{"affected_ids": ["1.1"], "description": "what is wrong and how to fix it"}}.
+Report only actual problems in issues: criteria scored 4 or 5 need no issue,
+and praise belongs in that score's "note", never in issues or
+revision_targets.
 
 Return this JSON shape:
 {{
@@ -2366,6 +2390,10 @@ Return this JSON shape:
   "issues": [],
   "revision_targets": []
 }}
+
+Write every "note" and "description" value in the SAME LANGUAGE as the chapter
+sections above (a Korean document gets Korean notes), regardless of the
+language of these instructions.
 """,
     )
 

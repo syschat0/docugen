@@ -645,23 +645,38 @@ def structure_quality_stats(
                 }
             )
 
-        paragraphs = [
-            " ".join(part.split())
-            for part in re.split(r"\n\s*\n", readable_body)
-            if " ".join(part.split())
-        ]
+        # Sentence and paragraph checks look at prose only: list items and
+        # table rows are dropped line by line (so a list glued to its lead-in
+        # without a blank line is not one giant sentence), and emphasis
+        # markers are stripped so "...다.**" still ends a sentence.
+        paragraphs: list[str] = []
+        for part in re.split(r"\n\s*\n", readable_body):
+            prose_lines = [
+                line
+                for line in part.splitlines()
+                if line.strip()
+                and not line.lstrip().startswith("|")
+                and not re.match(r"^\s*(?:[-*+] |\d+[.)] )", line)
+            ]
+            prose = " ".join(" ".join(prose_lines).split())
+            prose = re.sub(r"(?:\*\*|__|~~|[*`])", "", prose)
+            if prose:
+                paragraphs.append(prose)
         for paragraph in paragraphs:
-            if paragraph.startswith(("|", "- ", "* ", "+ ")) or re.match(r"^\d+[.)] ", paragraph):
-                continue
             paragraph_sentences = [
                 value.strip()
-                for value in re.split(r"(?<=[.!?。！？])(?:\s+|$)", paragraph)
+                for value in re.split(
+                    r"(?<=[.!?。！？])[\"'”’)\]]*(?:\s+|$)", paragraph
+                )
                 if value.strip()
             ]
-            if (
-                len(paragraph) > int(thresholds["paragraph_chars"])
-                or len(paragraph_sentences) > int(thresholds["paragraph_sentences"])
-            ):
+            # A paragraph of many short sentences is well paced, not dense;
+            # the sentence-count rule only applies once the paragraph is also
+            # long enough to read as a wall of text.
+            too_many_sentences = len(paragraph_sentences) > int(
+                thresholds["paragraph_sentences"]
+            ) and len(paragraph) >= int(thresholds["paragraph_chars"]) * 0.6
+            if len(paragraph) > int(thresholds["paragraph_chars"]) or too_many_sentences:
                 long_paragraphs += 1
                 add_issue(
                     {
@@ -761,6 +776,36 @@ def build_quality_summary(
         [str(item).strip() for item in (continuity.get("revision_targets") or []) + (rubric.get("revision_targets") or []) if str(item).strip()]
         + issue_section_ids(review_issues)
     ))
+    # One row per distinct reviewer note (a note usually spans several
+    # sections) instead of one row per section, so four findings do not
+    # render as ten; targets no note mentions keep a bare row each.
+    target_set = set(targets[:10])
+    noted_sections: set[str] = set()
+    target_issues: list[Dict[str, Any]] = []
+    note_row_index: dict[str, int] = {}
+    for issue in review_issues:
+        if not isinstance(issue, dict):
+            continue
+        description = str(issue.get("description") or "").strip()
+        if not description:
+            continue
+        ids = [sid for sid in issue_section_ids([issue]) if sid in target_set]
+        if not ids:
+            continue
+        noted_sections.update(ids)
+        if description in note_row_index:
+            row = target_issues[note_row_index[description]]
+            row["section_ids"] = list(dict.fromkeys(row["section_ids"] + ids))
+            continue
+        note_row_index[description] = len(target_issues)
+        target_issues.append(
+            {"type": "review_target", "section_ids": ids, "excerpts": [description]}
+        )
+    for section_id in targets[:10]:
+        if section_id not in noted_sections:
+            target_issues.append(
+                {"type": "review_target", "section_ids": [section_id], "excerpts": []}
+            )
     criteria = [item for item in (rubric.get("criteria") or []) if isinstance(item, dict)]
     low_scores = [item for item in criteria if isinstance(item.get("min_score"), (int, float)) and item["min_score"] <= 3]
     review_incomplete = continuity.get("verdict") == "incomplete" or rubric.get("verdict") == "incomplete"
@@ -833,6 +878,7 @@ def build_quality_summary(
         "review": {
             "issue_count": len(review_issues),
             "revision_targets": targets[:10],
+            "target_issues": target_issues[:10],
             "low_score_criteria": [str(item.get("key")) for item in low_scores],
             "incomplete": review_incomplete,
         },

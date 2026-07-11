@@ -2261,20 +2261,31 @@ def _apply_quality_decisions(
         )
 
     review = summary.setdefault("review", {})
+    # Older stored summaries carry only revision_targets; newer ones include
+    # target_issues whose excerpt is the reviewer's note for that section.
+    raw_target_issues = review.get("target_issues") or [
+        {"type": "review_target", "section_ids": [str(section_id)], "excerpts": []}
+        for section_id in (review.get("revision_targets") or [])
+    ]
     review["target_issues"] = [
         {
             "type": "review_target",
-            "section_ids": [str(section_id)],
-            "excerpts": [],
+            "section_ids": [str(value) for value in (item.get("section_ids") or [])],
+            "excerpts": [str(value) for value in (item.get("excerpts") or [])],
+            # Keyed without the excerpt so identity stays stable even when the
+            # reviewer words the same finding differently between runs.
             "issue_key": _quality_issue_key(
                 {
                     "type": "review_target",
-                    "section_ids": [str(section_id)],
+                    "section_ids": [
+                        str(value) for value in (item.get("section_ids") or [])
+                    ],
                     "excerpts": [],
                 }
             ),
         }
-        for section_id in (review.get("revision_targets") or [])
+        for item in raw_target_issues
+        if isinstance(item, dict)
     ]
 
     totals = _quality_type_totals(summary)
