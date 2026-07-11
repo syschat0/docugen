@@ -321,6 +321,21 @@ scripts\benchmark-quality.bat --candidate-dir data\benchmark-candidates --output
 The JSON report contains baseline/candidate metrics, deltas, warnings, and each
 failed expectation, making it suitable for CI or model/prompt comparisons.
 
+For a real before/after SLM evaluation, export the same benchmark project from
+both code or prompt versions, then create an automatic comparison plus a blind
+human-review packet:
+
+```bat
+scripts\export-slm-candidate.bat --project-id PROJECT_ID --case-id CASE_ID --output-dir data\slm-eval\before --run-label before --commit OLD_COMMIT
+scripts\export-slm-candidate.bat --project-id PROJECT_ID --case-id CASE_ID --output-dir data\slm-eval\after --run-label after --commit NEW_COMMIT
+scripts\compare-slm-runs.bat --before-dir data\slm-eval\before --after-dir data\slm-eval\after --output-dir data\slm-eval\report
+```
+
+`human_evaluation.json` contains blinded A/B text and six 1-5 scoring fields;
+`blind_key.json` is kept separate. Supplying the completed form through
+`--human-results` produces mean before/after scores and preference counts. See
+`benchmarks/slm_runs/README.md` for the controlled-run procedure.
+
 ## Style Samples
 
 Upload your own writing (.txt/.md) in the "Style samples" panel and the

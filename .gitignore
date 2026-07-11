@@ -5,6 +5,7 @@ __pycache__/
 data/app.sqlite3
 data/app.sqlite3-*
 data/projects/
+data/slm-eval/
 outputs/
 frontend/node_modules/
 frontend/.next/
