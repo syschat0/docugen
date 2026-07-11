@@ -14,6 +14,8 @@ Profile fields:
   section belong in the final document.
 - intake_priorities: ordered missing-information checks for the intake agent.
   These are guidance, not questions that must all be asked.
+- memory_schema: compact genre-specific state carried between sections and
+  compressed into chapter digests.
 - numbered_headings: whether section headings carry "1.2"-style numbers.
 - default_section_length: target body characters per section.
 - style_hint: default sentence register, used when the user's request does
@@ -49,6 +51,11 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "Required facts, metrics, organizations, or supplied evidence.",
             "Desired length, delivery format, and deadline if they constrain depth.",
         ],
+        "memory_schema": {
+            "findings": "New findings established here; do not repeat them later.",
+            "decision_logic": "How evidence changes the report's conclusion or recommendation.",
+            "constraints": "Scope limits, assumptions, and unresolved information gaps.",
+        },
         "numbered_headings": True,
         "default_section_length": 500,
         "classify_hint": (
@@ -92,6 +99,11 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "Required sources, citation rules, or evidence restrictions.",
             "Length and any mandatory sections, methods, or comparison cases.",
         ],
+        "memory_schema": {
+            "thesis_state": "How this section advances or qualifies the central thesis.",
+            "evidence_chain": "Key evidence-to-claim links established so far.",
+            "counterarguments": "Objections, limitations, or alternatives still requiring treatment.",
+        },
         "numbered_headings": True,
         "default_section_length": 600,
         "classify_hint": (
@@ -139,6 +151,11 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "Writer persona, stance, and preferred conversational register.",
             "Desired length and concrete examples or stories that must appear.",
         ],
+        "memory_schema": {
+            "reader_promise": "What value or takeaway has already been delivered to the reader.",
+            "examples_used": "Stories, examples, and analogies already used; avoid repeating them.",
+            "voice_cues": "Persona, stance, and recurring phrasing to keep consistent.",
+        },
         "numbered_headings": False,
         "default_section_length": 350,
         "classify_hint": (
@@ -184,6 +201,11 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "Point of view, mood, and how personal or argumentative it should be.",
             "Scenes, images, arguments, or ending effect that must be included.",
         ],
+        "memory_schema": {
+            "narrative_progress": "What changed in the scene, reflection, or argument's emotional arc.",
+            "people_and_images": "People, places, objects, and sensory images already introduced.",
+            "point_of_view_mood": "Narrative viewpoint, distance, tense, and current mood.",
+        },
         "numbered_headings": False,
         "default_section_length": 450,
         "classify_hint": (
@@ -230,6 +252,11 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "Prerequisites, constraints, failure cases, and safety boundaries.",
             "Required commands, examples, screenshots, or reference format.",
         ],
+        "memory_schema": {
+            "completed_steps": "Tasks and prerequisites already completed or explained.",
+            "system_state": "Versions, configuration, terminology, and expected current state.",
+            "unresolved_failures": "Failure cases or troubleshooting branches still open.",
+        },
         "numbered_headings": True,
         "default_section_length": 500,
         "classify_hint": (
@@ -276,6 +303,11 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "The single key message and action or feeling for the closing.",
             "Speaker persona, formality, and required greeting or acknowledgements.",
         ],
+        "memory_schema": {
+            "message_progress": "Which part of the key message the audience has already heard.",
+            "audience_callbacks": "Questions, examples, or moments that can be referenced again later.",
+            "delivery_cues": "Tone, pacing, transitions, and slide or demonstration cues to preserve.",
+        },
         "numbered_headings": False,
         "default_section_length": 400,
         "classify_hint": (

@@ -231,7 +231,9 @@ def test_section_writer_requests_and_returns_evidence_ledger(monkeypatch):
     )
     assert "[1.P1] Docker network bridge mode" in captured["prompt"]
     assert "[1][trust=authoritative]" in captured["prompt"]
+    assert "decision_logic" in captured["prompt"]
     assert summary["evidence"][0]["source_id"] == 1
+    assert set(summary["memory"]) == {"findings", "decision_logic", "constraints"}
     assert "[1]" in markdown
 
 

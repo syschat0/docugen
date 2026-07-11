@@ -1877,7 +1877,16 @@ def _local_section_draft(
     )
 
 
-def _local_section_summary(section: Dict[str, Any], markdown: str) -> Dict[str, Any]:
+def _empty_genre_memory(profile: Dict[str, Any] | None) -> Dict[str, list[Any]]:
+    profile = profile or get_doc_type_profile(None)
+    return {str(key): [] for key in (profile.get("memory_schema") or {})}
+
+
+def _local_section_summary(
+    section: Dict[str, Any],
+    markdown: str,
+    profile: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     return {
         "section_id": section.get("id", ""),
         "summary": markdown.split("\n\n", 1)[-1][:280],
@@ -1885,6 +1894,7 @@ def _local_section_summary(section: Dict[str, Any], markdown: str) -> Dict[str, 
         "terms": [],
         "open_threads": [],
         "next_section_handoff": f"Continue after {section.get('title', 'this section')}.",
+        "memory": _empty_genre_memory(profile),
         "evidence": [],
     }
 
@@ -1925,13 +1935,27 @@ def _section_title_context(
 
 
 def _local_chapter_digest(
-    chapter_id: str, chapter_title: str, chapter_summaries: list[Dict[str, Any]]
+    chapter_id: str,
+    chapter_title: str,
+    chapter_summaries: list[Dict[str, Any]],
+    profile: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     text = " ".join(
         str(summary.get("summary", "")).strip()
         for summary in chapter_summaries
         if str(summary.get("summary", "")).strip()
     )
+    memory = _empty_genre_memory(profile)
+    for key in memory:
+        values: list[str] = []
+        for summary in chapter_summaries:
+            value = (summary.get("memory") or {}).get(key)
+            candidates = value if isinstance(value, list) else [value]
+            for candidate in candidates:
+                clean = str(candidate or "").strip()
+                if clean and clean not in values:
+                    values.append(clean[:120])
+        memory[key] = values[:4]
     return {
         "chapter_id": chapter_id,
         "title": chapter_title,
@@ -1946,6 +1970,7 @@ def _local_chapter_digest(
             for summary in chapter_summaries
             for term in (summary.get("terms") or [])
         ][:8],
+        "memory": memory,
     }
 
 
@@ -1955,14 +1980,23 @@ def _build_chapter_digest(
     chapter_title: str,
     chapter_summaries: list[Dict[str, Any]],
 ) -> tuple[Dict[str, Any], Dict[str, Any] | None]:
+    profile = get_doc_type_profile(project.document_type)
     if settings.llm_enabled:
         try:
             return summarize_chapter(
-                project, {"id": chapter_id, "title": chapter_title}, chapter_summaries
+                project,
+                {"id": chapter_id, "title": chapter_title},
+                chapter_summaries,
+                profile=profile,
             )
         except LLMError:
             pass  # the digest is an enhancement; a local concat must not fail the run
-    return _local_chapter_digest(chapter_id, chapter_title, chapter_summaries), None
+    return (
+        _local_chapter_digest(
+            chapter_id, chapter_title, chapter_summaries, profile=profile
+        ),
+        None,
+    )
 
 
 def _local_merge(
@@ -3732,7 +3766,7 @@ def _write_planned_section(
         markdown, usage = _local_section_draft(
             project, section, previous_summary, section_sources, feedback
         ), None
-        summary = _local_section_summary(section, markdown)
+        summary = _local_section_summary(section, markdown, profile=profile)
     if usage is not None:
         usage_entries.append(usage)
     markdown = _ensure_markdown_heading_number(

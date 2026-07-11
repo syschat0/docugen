@@ -19,6 +19,7 @@ REQUIRED_FIELDS = (
     "research_default",
     "citations_enabled",
     "intake_priorities",
+    "memory_schema",
     "numbered_headings",
     "default_section_length",
     "classify_hint",
@@ -67,6 +68,14 @@ class TestRegistry:
             priorities = profile["intake_priorities"]
             assert 3 <= len(priorities) <= 5, key
             assert all(isinstance(item, str) and item.strip() for item in priorities)
+
+    def test_memory_schema_has_compact_distinct_fields(self):
+        for key, profile in DOC_TYPES.items():
+            schema = profile["memory_schema"]
+            assert 2 <= len(schema) <= 4, key
+            assert all(name and description for name, description in schema.items())
+        assert "narrative_progress" in DOC_TYPES["essay"]["memory_schema"]
+        assert "evidence_chain" in DOC_TYPES["academic_paper"]["memory_schema"]
 
 
 class TestSchemas:

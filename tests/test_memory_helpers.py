@@ -3,6 +3,7 @@ from app.db.repositories import (
     _local_chapter_digest,
     _section_title_context,
 )
+from app.services.doc_types import get_doc_type_profile
 
 SECTIONS = [
     {"id": "1.1", "title": "Background"},
@@ -79,3 +80,21 @@ class TestLocalChapterDigest:
         digest = _local_chapter_digest("2", "Setup", [])
         assert digest["digest"] == ""
         assert digest["claims"] == []
+
+    def test_aggregates_only_selected_genre_memory(self):
+        summaries = [
+            {
+                "summary": "A scene advances.",
+                "memory": {
+                    "narrative_progress": ["The narrator leaves home."],
+                    "evidence_chain": ["must not leak from another genre"],
+                },
+            }
+        ]
+        digest = _local_chapter_digest(
+            "1", "Departure", summaries, profile=get_doc_type_profile("essay")
+        )
+        assert digest["memory"]["narrative_progress"] == [
+            "The narrator leaves home."
+        ]
+        assert "evidence_chain" not in digest["memory"]

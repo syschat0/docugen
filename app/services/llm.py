@@ -236,6 +236,7 @@ def _summary_from_parsed_response(parsed: Dict[str, Any]) -> Dict[str, Any] | No
         "terms",
         "open_threads",
         "next_section_handoff",
+        "memory",
         "evidence",
     }
     if summary_keys.intersection(parsed.keys()):
@@ -246,6 +247,7 @@ def _summary_from_parsed_response(parsed: Dict[str, Any]) -> Dict[str, Any] | No
             "terms": parsed.get("terms", []),
             "open_threads": parsed.get("open_threads", []),
             "next_section_handoff": parsed.get("next_section_handoff", ""),
+            "memory": parsed.get("memory", {}),
             "evidence": parsed.get("evidence", []),
         }
 
@@ -277,6 +279,31 @@ def _clip_summary(summary: Dict[str, Any] | None) -> Dict[str, Any]:
             _clip(thread, 80) for thread in (summary.get("open_threads") or [])[:3]
         ],
         "next_section_handoff": _clip(summary.get("next_section_handoff"), 150),
+        "memory": _clip_memory(summary.get("memory")),
+    }
+
+
+def _clip_memory(memory: Any) -> Dict[str, Any]:
+    if not isinstance(memory, dict):
+        return {}
+    clipped: Dict[str, Any] = {}
+    for key, value in list(memory.items())[:6]:
+        clean_key = str(key).strip()[:50]
+        if not clean_key:
+            continue
+        if isinstance(value, list):
+            clipped[clean_key] = [_clip(item, 100) for item in value[:4]]
+        else:
+            clipped[clean_key] = _clip(value, 180)
+    return clipped
+
+
+def _normalize_memory(memory: Any, profile: Dict[str, Any]) -> Dict[str, Any]:
+    schema = profile.get("memory_schema") or {}
+    source = memory if isinstance(memory, dict) else {}
+    return {
+        str(key): _clip_memory({str(key): source.get(key, [])}).get(str(key), [])
+        for key in schema
     }
 
 
@@ -550,6 +577,23 @@ def _intake_priority_block(profile: Dict[str, Any] | None) -> str:
         f"{checklist}\n"
         "Use this only as a missing-information checklist. Infer answers from the "
         "request and known answers; do not ask every item mechanically.\n"
+    )
+
+
+def _memory_schema_block(profile: Dict[str, Any] | None) -> str:
+    """Explain the small genre-specific state object required in handoffs."""
+    profile = profile or get_doc_type_profile(None)
+    schema = profile.get("memory_schema") or {}
+    if not schema:
+        return ""
+    fields = "\n".join(f'- "{key}": {description}' for key, description in schema.items())
+    shape = {str(key): [] for key in schema}
+    return (
+        "\nGenre memory fields for summary.memory:\n"
+        f"{fields}\n"
+        "Keep each field compact (a short string or up to 4 short items). "
+        "Record only state future sections must remember.\n"
+        f"Use exactly these memory keys: {json.dumps(shape, ensure_ascii=False)}\n"
     )
 
 
@@ -1315,6 +1359,7 @@ def write_section_with_summary(
                     "chapter_id": str(digest.get("chapter_id", "")),
                     "title": _clip(digest.get("title"), 80),
                     "digest": _clip(digest.get("digest"), 300),
+                    "memory": _clip_memory(digest.get("memory")),
                 }
                 for digest in chapter_digests[-6:]
             ],
@@ -1405,7 +1450,7 @@ Relevant sources:
 {_source_context(sources, section)}{feedback_block}
 
 Write only this section in Markdown, in the same language as the brief topic.
-{_type_block(profile, "section_guidance")}Rules:
+{_type_block(profile, "section_guidance")}{_memory_schema_block(profile)}Rules:
 - Sentence register: {style}. Every sentence must use this register consistently.
 - Aim for roughly {target_length} characters of body text.
 - Start with exactly one heading: "{'#' * min(max(int(depth) if str(depth).isdigit() else 3, 2), 6)} {heading_title}".
@@ -1422,7 +1467,8 @@ Return this JSON shape:
     "claims": [],
     "terms": [],
     "open_threads": [],
-    "next_section_handoff": ""
+    "next_section_handoff": "",
+    "memory": {json.dumps({str(key): [] for key in (profile.get("memory_schema") or {})}, ensure_ascii=False)}
   }},
   "evidence": [
     {{
@@ -1460,8 +1506,10 @@ Use the exact key name "markdown" for the section body. Do not rename it to
             "terms": [],
             "open_threads": [],
             "next_section_handoff": f"Continue after {section.get('title', 'this section')}.",
+            "memory": {},
             "evidence": [],
         }
+    summary["memory"] = _normalize_memory(summary.get("memory"), profile)
     if isinstance(parsed, dict) and isinstance(parsed.get("evidence"), list):
         summary["evidence"] = parsed["evidence"][:12]
     elif not isinstance(summary.get("evidence"), list):
@@ -1772,12 +1820,14 @@ def summarize_chapter(
     project: ProjectRead,
     chapter: Dict[str, Any],
     section_summaries: list[Dict[str, Any]],
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     """Compress one finished chapter's section summaries into a short digest.
 
     Later chapters receive these digests instead of the full summary chain,
     so cross-chapter context stays a few hundred characters per chapter.
     """
+    profile = profile or get_doc_type_profile(getattr(project, "document_type", None))
     chapter_id = str(chapter.get("id", ""))
     chapter_title = str(chapter.get("title", ""))
     overview = [
@@ -1785,6 +1835,7 @@ def summarize_chapter(
             "section_id": str(summary.get("section_id", "")),
             "summary": _clip(summary.get("summary"), 200),
             "claims": [_clip(claim, 80) for claim in (summary.get("claims") or [])[:3]],
+            "memory": _clip_memory(summary.get("memory")),
         }
         for summary in section_summaries
     ]
@@ -1798,6 +1849,7 @@ Chapter {chapter_id}: {chapter_title}
 
 Section summaries JSON:
 {json.dumps(overview, ensure_ascii=False)}
+{_memory_schema_block(profile)}
 
 Summarize what this chapter established in 2-3 sentences, in the same language
 as the summaries. Also list up to 5 key claims and up to 8 key terms the
@@ -1807,7 +1859,8 @@ Return this JSON shape:
 {{
   "digest": "",
   "claims": [],
-  "terms": []
+  "terms": [],
+  "memory": {json.dumps({str(key): [] for key in (profile.get("memory_schema") or {})}, ensure_ascii=False)}
 }}
 """,
     )
@@ -1820,6 +1873,7 @@ Return this JSON shape:
         "digest": _clip(digest, 400),
         "claims": [_clip(claim, 80) for claim in (parsed.get("claims") or [])[:5]],
         "terms": [_clip(term, 40) for term in (parsed.get("terms") or [])[:8]],
+        "memory": _normalize_memory(parsed.get("memory"), profile),
     }, usage
 
 
