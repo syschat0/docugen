@@ -1649,6 +1649,40 @@ function renderProjectSettings() {
     els.targetLengthInput.value = config.target_length ?? "";
     els.targetLengthInput.placeholder = t("targetLengthAuto");
   }
+  applySettingDefaultLabels(config.defaults);
+}
+
+// "Use default" alone hides what the run would actually do, so each default
+// option is relabeled with the server-resolved value, e.g. "Use default (On)".
+function applySettingDefaultLabels(defaults) {
+  if (!defaults) return;
+  const onOff = (value) => t(value ? "on" : "off");
+  const engineNames = { daum: "Daum", bing: "Bing", google: "Google" };
+  const engineChain = (defaults.search_engines || [])
+    .map((engine) => engineNames[engine] || engine)
+    .join(" → ");
+  const queryLangLabel = {
+    native: t("queryLangNative"),
+    english: t("queryLangEnglish"),
+    both: t("queryLangBoth"),
+  }[defaults.search_query_language];
+  const citationLabel = defaults.citation_style
+    ? t(defaults.citation_style === "author_date" ? "citationAuthorDate" : "citationNumeric")
+    : "";
+  const labelled = [
+    [els.searchEnabledSelect, onOff(defaults.search_enabled)],
+    [els.sectionSearchSelect, onOff(defaults.section_search_enabled)],
+    [els.searchEngine1Select, engineChain],
+    [els.searchHeadlessSelect, onOff(defaults.search_headless)],
+    [els.searchStealthSelect, onOff(defaults.search_stealth)],
+    [els.searchLocaleSelect, defaults.search_locale || ""],
+    [els.searchQueryLanguageSelect, queryLangLabel || ""],
+    [els.citationStyleSelect, citationLabel],
+  ];
+  for (const [select, label] of labelled) {
+    const option = select?.querySelector('option[value="default"]');
+    if (option && label) option.textContent = `${t("useDefault")} (${label})`;
+  }
 }
 
 async function saveProjectSettings() {
@@ -2873,6 +2907,7 @@ function rerenderCurrentView() {
   renderDraftPreview();
   renderQuality();
   renderNextAction();
+  renderProjectSettings();
   renderTabs();
   if (selectedProject()) {
     applyLayoutPhase();
