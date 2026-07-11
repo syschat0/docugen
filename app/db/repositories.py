@@ -2639,6 +2639,15 @@ class FeedbackRevisionStageResult:
     artifact_ids: list[str]
 
 
+@dataclass(frozen=True)
+class DocumentReviewStageResult:
+    continuity: Dict[str, Any]
+    rubric_review: Dict[str, Any]
+    combined_review: Dict[str, Any]
+    rubric_time: str
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -3902,6 +3911,153 @@ def _run_feedback_revision_stage(
     )
 
 
+def _run_document_review_stage(
+    project_id: str,
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    profile: Dict[str, Any],
+    section_drafts: list[Dict[str, Any]],
+    summaries: list[Dict[str, Any]],
+    section_work_time: str,
+    agent_name: str,
+) -> DocumentReviewStageResult:
+    """Run or reuse continuity and document-type rubric reviews."""
+    artifact_ids: list[str] = []
+    continuity_artifact = _latest_artifact(project_id, "continuity_review")
+    if continuity_artifact is not None and _is_fresh(
+        continuity_artifact.updated_at, section_work_time
+    ):
+        continuity = continuity_artifact.content or {}
+        artifact_ids.append(continuity_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "continuity_review",
+            {"artifact_id": continuity_artifact.id},
+        )
+        continuity_time = continuity_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "continuity_review",
+            {"section_count": len(section_drafts)},
+        )
+        try:
+            if settings.llm_enabled:
+                continuity, usage = review_continuity_staged(
+                    project,
+                    brief,
+                    section_drafts,
+                    summaries,
+                    _list_chapter_digests(project_id),
+                )
+            else:
+                continuity, usage = {
+                    "verdict": "pass",
+                    "issues": [],
+                    "revision_targets": [],
+                    "notes": "Local fallback continuity review passed.",
+                }, None
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "continuity_review", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "continuity_review",
+                "Continuity review",
+                continuity,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        continuity_artifact = get_artifact(project_id, artifact_id)
+        continuity_time = (
+            continuity_artifact.updated_at if continuity_artifact else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {"artifact_id": artifact_id, "verdict": continuity.get("verdict")},
+            token_usage=usage,
+        )
+
+    rubric_artifact = _latest_artifact(project_id, "rubric_review")
+    if rubric_artifact is not None and _is_fresh(
+        rubric_artifact.updated_at, continuity_time
+    ):
+        rubric_review = rubric_artifact.content or {}
+        artifact_ids.append(rubric_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "rubric_review",
+            {"artifact_id": rubric_artifact.id},
+        )
+        rubric_time = rubric_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "rubric_review",
+            {
+                "section_count": len(section_drafts),
+                "document_type": profile.get("key"),
+            },
+        )
+        try:
+            if settings.llm_enabled:
+                rubric_review, usage = review_rubric_staged(
+                    project, brief, profile, section_drafts
+                )
+            else:
+                rubric_review, usage = {
+                    "verdict": "pass",
+                    "criteria": [],
+                    "issues": [],
+                    "revision_targets": [],
+                    "notes": "Local fallback rubric review passed.",
+                }, None
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "rubric_review", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "rubric_review",
+                "Rubric review",
+                rubric_review,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        rubric_artifact = get_artifact(project_id, artifact_id)
+        rubric_time = rubric_artifact.updated_at if rubric_artifact else utc_now_iso()
+        _complete_agent_run(
+            run_id,
+            {
+                "artifact_id": artifact_id,
+                "verdict": rubric_review.get("verdict"),
+                "scores": {
+                    str(item.get("key")): item.get("average_score")
+                    for item in (rubric_review.get("criteria") or [])
+                    if isinstance(item, dict)
+                },
+            },
+            token_usage=usage,
+        )
+
+    return DocumentReviewStageResult(
+        continuity=continuity,
+        rubric_review=rubric_review,
+        combined_review=_combine_reviews(continuity, rubric_review),
+        rubric_time=rubric_time,
+        artifact_ids=artifact_ids,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -4309,129 +4465,21 @@ def _run_document_generation(
         section_work_time = feedback_result.section_work_time
         artifact_ids.extend(feedback_result.artifact_ids)
 
-        continuity_artifact = _latest_artifact(project_id, "continuity_review")
-        if continuity_artifact is not None and _is_fresh(
-            continuity_artifact.updated_at, section_work_time
-        ):
-            continuity = continuity_artifact.content or {}
-            artifact_ids.append(continuity_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "continuity_review",
-                {"artifact_id": continuity_artifact.id},
-            )
-            continuity_time = continuity_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "continuity_review",
-                {"section_count": len(section_drafts)},
-            )
-            if settings.llm_enabled:
-                continuity, usage = review_continuity_staged(
-                    project,
-                    brief,
-                    section_drafts,
-                    summaries,
-                    _list_chapter_digests(project_id),
-                )
-            else:
-                continuity, usage = {
-                    "verdict": "pass",
-                    "issues": [],
-                    "revision_targets": [],
-                    "notes": "Local fallback continuity review passed.",
-                }, None
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "continuity_review",
-                        "Continuity review",
-                        continuity,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            continuity_artifact = get_artifact(project_id, artifact_ids[-1])
-            continuity_time = continuity_artifact.updated_at if continuity_artifact else utc_now_iso()
-            _complete_agent_run(
-                run_id,
-                {"artifact_id": artifact_ids[-1], "verdict": continuity.get("verdict")},
-                token_usage=usage,
-            )
-
-        rubric_artifact = _latest_artifact(project_id, "rubric_review")
-        if rubric_artifact is not None and _is_fresh(
-            rubric_artifact.updated_at, continuity_time
-        ):
-            rubric_review = rubric_artifact.content or {}
-            artifact_ids.append(rubric_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "rubric_review",
-                {"artifact_id": rubric_artifact.id},
-            )
-            rubric_time = rubric_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "rubric_review",
-                {
-                    "section_count": len(section_drafts),
-                    "document_type": profile.get("key"),
-                },
-            )
-            if settings.llm_enabled:
-                rubric_review, usage = review_rubric_staged(
-                    project, brief, profile, section_drafts
-                )
-            else:
-                rubric_review, usage = {
-                    "verdict": "pass",
-                    "criteria": [],
-                    "issues": [],
-                    "revision_targets": [],
-                    "notes": "Local fallback rubric review passed.",
-                }, None
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "rubric_review",
-                        "Rubric review",
-                        rubric_review,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            rubric_review_artifact = get_artifact(project_id, artifact_ids[-1])
-            rubric_time = (
-                rubric_review_artifact.updated_at
-                if rubric_review_artifact
-                else utc_now_iso()
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "verdict": rubric_review.get("verdict"),
-                    "scores": {
-                        str(item.get("key")): item.get("average_score")
-                        for item in (rubric_review.get("criteria") or [])
-                        if isinstance(item, dict)
-                    },
-                },
-                token_usage=usage,
-            )
-
-        combined_review = _combine_reviews(continuity, rubric_review)
+        review_result = _run_document_review_stage(
+            project_id,
+            project,
+            brief,
+            profile,
+            section_drafts,
+            summaries,
+            section_work_time,
+            agent_name,
+        )
+        continuity = review_result.continuity
+        rubric_review = review_result.rubric_review
+        combined_review = review_result.combined_review
+        rubric_time = review_result.rubric_time
+        artifact_ids.extend(review_result.artifact_ids)
 
         revision_artifact = _latest_artifact(project_id, "targeted_revision")
         if revision_artifact is not None and _is_fresh(
