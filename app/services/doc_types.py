@@ -16,6 +16,8 @@ Profile fields:
   These are guidance, not questions that must all be asked.
 - memory_schema: compact genre-specific state carried between sections and
   compressed into chapter digests.
+- generation_params: per-stage temperature and output-token budget. Planning,
+  review, and summaries stay deterministic; prose variability follows genre.
 - numbered_headings: whether section headings carry "1.2"-style numbers.
 - default_section_length: target body characters per section.
 - style_hint: default sentence register, used when the user's request does
@@ -28,6 +30,22 @@ Profile fields:
 from typing import Any, Dict
 
 DEFAULT_DOC_TYPE = "report"
+
+
+def _generation_params(
+    *, writing: float, planning: float = 0.2, revision: float = 0.2
+) -> Dict[str, Dict[str, Any]]:
+    """Shared token budgets with genre-specific creativity controls."""
+    return {
+        "intake": {"temperature": 0.1, "max_tokens": 1000},
+        "brief": {"temperature": planning, "max_tokens": 1800},
+        "outline": {"temperature": planning, "max_tokens": 2400},
+        "section_plan": {"temperature": planning, "max_tokens": 3200},
+        "section_writing": {"temperature": writing, "max_tokens": 5000},
+        "summary": {"temperature": 0.1, "max_tokens": 1400},
+        "review": {"temperature": 0.1, "max_tokens": 2600},
+        "revision": {"temperature": revision, "max_tokens": 4200},
+    }
 
 DOC_TYPES: Dict[str, Dict[str, Any]] = {
     "report": {
@@ -56,6 +74,7 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "decision_logic": "How evidence changes the report's conclusion or recommendation.",
             "constraints": "Scope limits, assumptions, and unresolved information gaps.",
         },
+        "generation_params": _generation_params(writing=0.25),
         "numbered_headings": True,
         "default_section_length": 500,
         "classify_hint": (
@@ -104,6 +123,7 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "evidence_chain": "Key evidence-to-claim links established so far.",
             "counterarguments": "Objections, limitations, or alternatives still requiring treatment.",
         },
+        "generation_params": _generation_params(writing=0.2, planning=0.15),
         "numbered_headings": True,
         "default_section_length": 600,
         "classify_hint": (
@@ -156,6 +176,9 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "examples_used": "Stories, examples, and analogies already used; avoid repeating them.",
             "voice_cues": "Persona, stance, and recurring phrasing to keep consistent.",
         },
+        "generation_params": _generation_params(
+            writing=0.55, planning=0.3, revision=0.3
+        ),
         "numbered_headings": False,
         "default_section_length": 350,
         "classify_hint": (
@@ -206,6 +229,9 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "people_and_images": "People, places, objects, and sensory images already introduced.",
             "point_of_view_mood": "Narrative viewpoint, distance, tense, and current mood.",
         },
+        "generation_params": _generation_params(
+            writing=0.65, planning=0.35, revision=0.35
+        ),
         "numbered_headings": False,
         "default_section_length": 450,
         "classify_hint": (
@@ -257,6 +283,9 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "system_state": "Versions, configuration, terminology, and expected current state.",
             "unresolved_failures": "Failure cases or troubleshooting branches still open.",
         },
+        "generation_params": _generation_params(
+            writing=0.15, planning=0.1, revision=0.1
+        ),
         "numbered_headings": True,
         "default_section_length": 500,
         "classify_hint": (
@@ -308,6 +337,9 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
             "audience_callbacks": "Questions, examples, or moments that can be referenced again later.",
             "delivery_cues": "Tone, pacing, transitions, and slide or demonstration cues to preserve.",
         },
+        "generation_params": _generation_params(
+            writing=0.5, planning=0.3, revision=0.25
+        ),
         "numbered_headings": False,
         "default_section_length": 400,
         "classify_hint": (

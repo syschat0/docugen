@@ -3,6 +3,7 @@ import re
 import urllib.error
 import urllib.request
 from collections import Counter
+from contextvars import ContextVar
 from typing import Any, Dict
 
 from app.core.config import settings
@@ -24,6 +25,11 @@ from app.services.search_options import current_search_options
 
 class LLMError(Exception):
     pass
+
+
+_GENERATION_OPTIONS: ContextVar[Dict[str, Any]] = ContextVar(
+    "generation_options", default={}
+)
 
 
 def _strip_json_fence(text: str) -> str:
@@ -108,11 +114,12 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
 
 def _request_chat_completion(messages: list[dict[str, str]]) -> dict[str, Any]:
     config = get_active_llm_config()
+    generation = _GENERATION_OPTIONS.get()
     payload = {
         "model": config["model"],
         "messages": messages,
-        "temperature": 0.4,
-        "max_tokens": 6000,
+        "temperature": generation.get("temperature", 0.4),
+        "max_tokens": generation.get("max_tokens", 6000),
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
@@ -547,6 +554,47 @@ Invalid response:
         return repaired, None
 
 
+def _generation_options(
+    profile: Dict[str, Any] | None, stage: str
+) -> Dict[str, Any]:
+    profile = profile or get_doc_type_profile(None)
+    raw = (profile.get("generation_params") or {}).get(stage) or {}
+    try:
+        temperature = min(max(float(raw.get("temperature", 0.4)), 0.0), 1.5)
+    except (TypeError, ValueError):
+        temperature = 0.4
+    try:
+        max_tokens = min(max(int(raw.get("max_tokens", 6000)), 256), 12000)
+    except (TypeError, ValueError):
+        max_tokens = 6000
+    return {"temperature": temperature, "max_tokens": max_tokens}
+
+
+def _stage_json_chat(
+    profile: Dict[str, Any] | None,
+    stage: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> tuple[Dict[str, Any], dict[str, Any] | None]:
+    token = _GENERATION_OPTIONS.set(_generation_options(profile, stage))
+    try:
+        return _json_chat(system_prompt, user_prompt)
+    finally:
+        _GENERATION_OPTIONS.reset(token)
+
+
+def _stage_chat_content(
+    profile: Dict[str, Any] | None,
+    stage: str,
+    messages: list[dict[str, str]],
+) -> tuple[str, dict[str, Any] | None]:
+    token = _GENERATION_OPTIONS.set(_generation_options(profile, stage))
+    try:
+        return _chat_content(messages)
+    finally:
+        _GENERATION_OPTIONS.reset(token)
+
+
 def _type_block(profile: Dict[str, Any] | None, guidance_key: str) -> str:
     """Genre conventions block injected into a stage prompt ('' when absent)."""
     profile = profile or get_doc_type_profile(None)
@@ -677,7 +725,7 @@ Return this exact JSON shape:
   ]
 }}
 """
-    parsed, usage = _json_chat(system_prompt, user_prompt)
+    parsed, usage = _stage_json_chat(profile, "intake", system_prompt, user_prompt)
     if not parsed.get("needs_questions"):
         return [], usage
 
@@ -946,7 +994,9 @@ def generate_brief(
     profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     profile = profile or get_doc_type_profile(None)
-    parsed, usage = _json_chat(
+    parsed, usage = _stage_json_chat(
+        profile,
+        "brief",
         "You create compact document briefs. Return only valid JSON.",
         f"""
 Project title:
@@ -1010,7 +1060,10 @@ def generate_outline(
     profile: Dict[str, Any] | None = None,
     doc_target: int | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
-    parsed, usage = _json_chat(
+    profile = profile or get_doc_type_profile(None)
+    parsed, usage = _stage_json_chat(
+        profile,
+        "outline",
         "You create concise document outlines. Return only valid JSON.",
         f"""
 Project title:
@@ -1044,7 +1097,10 @@ Return this JSON shape:
 def review_outline(
     project: ProjectRead, brief: Dict[str, Any], outline: Dict[str, Any]
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
-    return _json_chat(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    return _stage_json_chat(
+        profile,
+        "review",
         "You review document outlines for gaps, duplication, and flow, and fix them when needed. Return only valid JSON.",
         f"""
 Project title:
@@ -1134,7 +1190,9 @@ def expand_chapter_subtree(
 Reviewer feedback to address in this expansion:
 {json.dumps(feedback, ensure_ascii=False)}
 """
-    parsed, usage = _json_chat(
+    parsed, usage = _stage_json_chat(
+        profile,
+        "section_plan",
         "You expand one outline chapter into a compact hierarchical writing subtree. Return only valid JSON.",
         f"""
 Project title:
@@ -1242,7 +1300,10 @@ def review_section_plan(
     section_plan: Dict[str, Any],
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     skeleton = tree_skeleton(section_plan.get("outline_tree") or [])
-    return _json_chat(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    return _stage_json_chat(
+        profile,
+        "review",
         "You review hierarchical section plans for depth, overlap, missing sections, and sequencing. Return only valid JSON.",
         f"""
 Project title:
@@ -1280,7 +1341,10 @@ def write_section(
     previous_summary: Dict[str, Any] | None,
     research: Dict[str, Any] | None,
 ) -> tuple[str, dict[str, Any] | None]:
-    content, usage = _chat_content(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    content, usage = _stage_chat_content(
+        profile,
+        "section_writing",
         [
             {
                 "role": "system",
@@ -1418,7 +1482,9 @@ User improvement requests for this section (must be reflected):
             "- Use the sources only as background knowledge. Do NOT insert citation "
             "markers such as [1] or a source list; this document type has no citations."
         )
-    content, usage = _chat_content(
+    content, usage = _stage_chat_content(
+        profile,
+        "section_writing",
         [
             {
                 "role": "system",
@@ -1531,7 +1597,10 @@ def repair_section_evidence(
     ledger again and keeps any remaining failure visible to the quality layer.
     """
     style = str(brief.get("style") or brief.get("tone") or "match the document")
-    content, usage = _chat_content(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    content, usage = _stage_chat_content(
+        profile,
+        "revision",
         [
             {
                 "role": "system",
@@ -1619,7 +1688,10 @@ def _repair_one_sentence_quality_section(
     original = str(draft.get("markdown") or "")
     sources = [source for source in (draft.get("sources") or []) if isinstance(source, dict)]
     style = str(brief.get("style") or brief.get("tone") or "match the document")
-    content, usage = _chat_content(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    content, usage = _stage_chat_content(
+        profile,
+        "revision",
         [
             {
                 "role": "system",
@@ -1791,9 +1863,13 @@ def repair_sentence_quality_sections(
 
 
 def summarize_section(
-    section: Dict[str, Any], markdown: str
+    section: Dict[str, Any],
+    markdown: str,
+    profile: Dict[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
-    parsed, usage = _json_chat(
+    parsed, usage = _stage_json_chat(
+        profile,
+        "summary",
         "You summarize a written section for downstream context. Return only valid JSON.",
         f"""
 Section JSON:
@@ -1839,7 +1915,9 @@ def summarize_chapter(
         }
         for summary in section_summaries
     ]
-    parsed, usage = _json_chat(
+    parsed, usage = _stage_json_chat(
+        profile,
+        "summary",
         "You compress one finished document chapter into a compact digest that later chapters rely on. Return only valid JSON.",
         f"""
 Project title:
@@ -1957,7 +2035,10 @@ def _smooth_one_transition(
     opening: str,
 ) -> tuple[str, dict[str, Any] | None]:
     style = str(brief.get("style") or brief.get("tone") or "match the document")
-    parsed, usage = _json_chat(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    parsed, usage = _stage_json_chat(
+        profile,
+        "revision",
         "You rewrite the opening paragraph of a chapter so it flows naturally from the previous chapter. Return only valid JSON.",
         f"""
 Project title:
@@ -2076,7 +2157,10 @@ def _review_chapter_continuity(
     overview: list[Dict[str, Any]],
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     style = str(brief.get("style") or brief.get("tone") or "")
-    return _json_chat(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    return _stage_json_chat(
+        profile,
+        "review",
         "You review the sections of one document chapter for continuity, repeated ideas, terminology and register consistency. Return only valid JSON.",
         f"""
 Project title:
@@ -2120,7 +2204,10 @@ def _review_cross_chapter_continuity(
         }
         for digest in chapter_digests
     ]
-    return _json_chat(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    return _stage_json_chat(
+        profile,
+        "review",
         "You review chapter digests of a document for cross-chapter repetition, terminology drift, and ordering problems. Return only valid JSON.",
         f"""
 Project title:
@@ -2249,7 +2336,10 @@ def _review_chapter_rubric(
     rubric: list[Dict[str, Any]],
 ) -> tuple[Dict[str, Any], dict[str, Any] | None]:
     style = str(brief.get("style") or brief.get("tone") or "unspecified")
-    return _json_chat(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    return _stage_json_chat(
+        profile,
+        "review",
         "You grade one chapter of a document against a quality rubric. Return only valid JSON.",
         f"""
 Project title:
@@ -2401,7 +2491,10 @@ def _revise_one_section(
 ) -> tuple[str, dict[str, Any] | None]:
     section = draft.get("section") or {}
     style = str(brief.get("style") or brief.get("tone") or "match the document")
-    content, usage = _chat_content(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    content, usage = _stage_chat_content(
+        profile,
+        "revision",
         [
             {
                 "role": "system",
@@ -2457,7 +2550,10 @@ def revise_section_with_feedback(
     section = draft.get("section") or {}
     style = str(brief.get("style") or brief.get("tone") or "match the document")
     comment_lines = "\n".join(f"- {_clip(comment, 400)}" for comment in comments[:8])
-    content, usage = _chat_content(
+    profile = get_doc_type_profile(getattr(project, "document_type", None))
+    content, usage = _stage_chat_content(
+        profile,
+        "revision",
         [
             {
                 "role": "system",

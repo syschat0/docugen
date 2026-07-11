@@ -20,6 +20,7 @@ REQUIRED_FIELDS = (
     "citations_enabled",
     "intake_priorities",
     "memory_schema",
+    "generation_params",
     "numbered_headings",
     "default_section_length",
     "classify_hint",
@@ -76,6 +77,27 @@ class TestRegistry:
             assert all(name and description for name, description in schema.items())
         assert "narrative_progress" in DOC_TYPES["essay"]["memory_schema"]
         assert "evidence_chain" in DOC_TYPES["academic_paper"]["memory_schema"]
+
+    def test_generation_params_cover_pipeline_stages(self):
+        expected = {
+            "intake",
+            "brief",
+            "outline",
+            "section_plan",
+            "section_writing",
+            "summary",
+            "review",
+            "revision",
+        }
+        for key, profile in DOC_TYPES.items():
+            params = profile["generation_params"]
+            assert set(params) == expected, key
+            assert all(0 <= item["temperature"] <= 1.5 for item in params.values())
+            assert all(256 <= item["max_tokens"] <= 12000 for item in params.values())
+        assert (
+            DOC_TYPES["essay"]["generation_params"]["section_writing"]["temperature"]
+            > DOC_TYPES["tech_doc"]["generation_params"]["section_writing"]["temperature"]
+        )
 
 
 class TestSchemas:
