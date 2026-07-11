@@ -107,6 +107,86 @@ class TestProfileDefaults:
         )
         assert repositories.effective_search_enabled("p1") is False
 
+    def test_explicit_override_cannot_bypass_global_search_gate(self, monkeypatch):
+        monkeypatch.setattr(
+            repositories, "get_project_settings", lambda pid: {"search_enabled": True}
+        )
+        monkeypatch.setattr(repositories, "get_project", lambda pid: _project("report"))
+        monkeypatch.setattr(
+            repositories, "settings", SimpleNamespace(search_enabled=False)
+        )
+        assert repositories.effective_search_enabled("p1") is False
+
+
+class TestProfileStageGating:
+    def test_disabled_research_skips_web_and_preserves_reference_pool(
+        self, monkeypatch
+    ):
+        runs = []
+        monkeypatch.setattr(
+            repositories, "effective_search_enabled", lambda project_id: False
+        )
+        monkeypatch.setattr(
+            repositories,
+            "_complete_reuse_run",
+            lambda *args, **kwargs: runs.append((args[2], args[3])),
+        )
+        reference = SimpleNamespace(
+            kind="url",
+            status="ready",
+            content_text="User supplied evidence.",
+            source="https://example.com/reference",
+            title="Provided reference",
+        )
+        monkeypatch.setattr(
+            repositories, "list_project_references", lambda pid: [reference]
+        )
+        monkeypatch.setattr(
+            repositories,
+            "_latest_artifact",
+            lambda *args: pytest.fail("disabled research must not read artifacts"),
+        )
+
+        result = repositories._run_research_stage(
+            "p1", _project("essay"), [], "writer", "2026-01-01T00:00:00Z"
+        )
+
+        assert result.research["enabled"] is False
+        assert result.research["results"][0]["url"] == reference.source
+        assert (
+            result.source_summaries["sources"][0]["url"] == reference.source
+        )
+        assert result.artifact_ids == []
+        assert [stage for stage, _payload in runs] == ["research", "source_summary"]
+
+    def test_disabled_chapter_research_skips_artifacts(self, monkeypatch):
+        runs = []
+        monkeypatch.setattr(
+            repositories, "effective_search_enabled", lambda project_id: False
+        )
+        monkeypatch.setattr(
+            repositories,
+            "_complete_reuse_run",
+            lambda *args, **kwargs: runs.append((args[2], args[3])),
+        )
+        monkeypatch.setattr(
+            repositories,
+            "_latest_artifact",
+            lambda *args: pytest.fail("disabled chapter research must not read artifacts"),
+        )
+
+        result = repositories._run_chapter_research_stage(
+            "p1",
+            _project("essay"),
+            {"outline_tree": []},
+            "writer",
+            "2026-01-01T00:00:00Z",
+        )
+
+        assert result.chapter_sources == {"enabled": False, "chapters": []}
+        assert result.artifact_ids == []
+        assert runs[0][0] == "chapter_research"
+
 
 class TestHeadingNumbering:
     def test_numbered_inserts_section_id(self):

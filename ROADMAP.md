@@ -66,8 +66,10 @@
       - [x] 3-1m. 연속성·유형별 루브릭 검토를 `_run_document_review_stage`로 추출
       - [x] 3-1n. 검토 기반 타깃 수정·문장 품질 제한 복구를 `_run_targeted_revision_stage`로 추출
       - [x] 3-1o. 신규 섹션 순회·저장·장 요약·출처 보강을 `_run_new_section_writing_stage`로 추출
-- [ ] 3-2. 유형 프로파일에 따라 리서치·인용 스테이지 조건부 실행
-      (M1의 citation_style과 연결: 인용 자체의 on/off는 유형이 결정)
+- [x] 3-2. 유형 프로파일에 따라 리서치·인용 스테이지 조건부 실행
+      — `research_default=false` 유형은 웹·장별 리서치를 명시적으로 건너뛰되
+      사용자 첨부 자료는 유지. 전역 검색 차단은 프로젝트 재정의보다 우선.
+      `citations_enabled=false` 유형은 인용·출처 렌더링을 생략하고 버전 조건에도 표시.
 
 ## M4. 구조·분량 규칙 유형별화 — M2 의존
 

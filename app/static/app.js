@@ -159,6 +159,7 @@ const translations = {
     latestBadge: "Latest",
     restoredFrom: "restored from v{version}",
     condSearch: "Search",
+    condCitations: "Citations",
     condRefs: "Refs",
     noVersions: "No versions yet.",
     questionAdded: "Question added.",
@@ -471,6 +472,7 @@ const translations = {
     latestBadge: "최신",
     restoredFrom: "v{version}에서 복원",
     condSearch: "검색",
+    condCitations: "인용",
     condRefs: "참조",
     noVersions: "아직 버전이 없습니다.",
     questionAdded: "질문을 추가했습니다.",
@@ -2330,9 +2332,10 @@ function conditionsSummary(conditions) {
   if (!conditions) return "";
   const parts = [
     `${t("condSearch")} ${conditions.search_enabled ? t("on") : t("off")}`,
+    `${t("condCitations")} ${conditions.citations_enabled === false ? t("off") : t("on")}`,
     `${t("condRefs")} ${conditions.reference_count ?? 0}`,
   ];
-  if (conditions.citation_style) {
+  if (conditions.citations_enabled !== false && conditions.citation_style) {
     parts.push(
       conditions.citation_style === "author_date"
         ? t("citationAuthorDate")

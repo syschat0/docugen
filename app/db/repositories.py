@@ -284,7 +284,7 @@ def effective_search_enabled(project_id: str) -> bool:
     """
     value = get_project_settings(project_id).get("search_enabled")
     if value is not None:
-        return bool(value)
+        return settings.search_enabled and bool(value)
     project = get_project(project_id)
     profile = get_doc_type_profile(project.document_type if project else None)
     return settings.search_enabled and bool(profile.get("research_default", True))
@@ -2429,10 +2429,12 @@ def _draft_conditions(project_id: str) -> Dict[str, Any]:
     except Exception:
         model = settings.llm_model
     project = get_project(project_id)
+    profile = get_doc_type_profile(project.document_type if project else None)
     return {
         "document_type": project.document_type if project else None,
         "search_enabled": effective_search_enabled(project_id),
         "section_search_enabled": effective_section_search_enabled(project_id),
+        "citations_enabled": bool(profile.get("citations_enabled", True)),
         "citation_style": effective_citation_style(project_id),
         "target_length": get_project_settings(project_id).get("target_length"),
         "reference_count": len(references),
@@ -2943,6 +2945,33 @@ def _run_research_stage(
     input_cutoff: str,
 ) -> ResearchStageResult:
     """Build or reuse web research and its normalized source summaries."""
+    if not effective_search_enabled(project_id):
+        research: Dict[str, Any] = {"enabled": False, "results": []}
+        source_summaries: Dict[str, Any] = {"sources": []}
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "research",
+            {"skipped": True, "reason": "disabled_by_profile_or_settings"},
+        )
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "source_summary",
+            {"skipped": True, "reason": "research_disabled"},
+        )
+        _merge_reference_sources(
+            list_project_references(project_id), research, source_summaries
+        )
+        research["source_summaries"] = source_summaries
+        return ResearchStageResult(
+            research=research,
+            source_summaries=source_summaries,
+            research_cutoff=input_cutoff,
+            source_summary_time=input_cutoff,
+            artifact_ids=[],
+        )
+
     artifact_ids: list[str] = []
     research_artifact = _latest_artifact(project_id, "research_sources")
     if research_artifact is not None and _is_fresh(
@@ -3535,6 +3564,19 @@ def _run_chapter_research_stage(
     section_plan_review_time: str,
 ) -> ChapterResearchStageResult:
     """Build or reuse the source pool assigned to each planned chapter."""
+    if not effective_search_enabled(project_id):
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "chapter_research",
+            {"skipped": True, "reason": "disabled_by_profile_or_settings"},
+        )
+        return ChapterResearchStageResult(
+            chapter_sources={"enabled": False, "chapters": []},
+            chapter_research_time=section_plan_review_time,
+            artifact_ids=[],
+        )
+
     artifact_ids: list[str] = []
     chapter_sources_artifact = _latest_artifact(project_id, "chapter_sources")
     if chapter_sources_artifact is not None and _is_fresh(
