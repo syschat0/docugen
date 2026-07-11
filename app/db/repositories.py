@@ -2593,6 +2593,14 @@ class BriefStageResult:
     artifact_ids: list[str]
 
 
+@dataclass(frozen=True)
+class OutlineStageResult:
+    outline: Dict[str, Any]
+    outline_review_time: str
+    artifact_ids: list[str]
+    waiting_result: WorkflowRunRead | None = None
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -3064,6 +3072,207 @@ def _run_brief_stage(
     )
 
 
+def _run_outline_stage(
+    project_id: str,
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    profile: Dict[str, Any],
+    agent_name: str,
+    brief_time: str,
+    doc_target: int,
+) -> OutlineStageResult:
+    """Build, review, and optionally wait for approval of the outline."""
+    artifact_ids: list[str] = []
+    outline_artifact = _latest_artifact(project_id, "outline")
+    if outline_artifact is not None and _is_fresh(
+        outline_artifact.updated_at, brief_time
+    ):
+        outline = outline_artifact.content or {}
+        artifact_ids.append(outline_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "outline",
+            {"artifact_id": outline_artifact.id},
+        )
+        outline_time = outline_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id, agent_name, "outline", {"brief": brief}
+        )
+        try:
+            if settings.llm_enabled:
+                outline, usage = generate_outline(
+                    project, brief, profile=profile, doc_target=doc_target
+                )
+            else:
+                outline, usage = _local_outline(project, brief), None
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "outline", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "outline",
+                "Generated outline",
+                outline,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        outline_artifact = get_artifact(project_id, artifact_id)
+        outline_time = outline_artifact.updated_at if outline_artifact else utc_now_iso()
+        _complete_agent_run(
+            run_id, {"artifact_id": artifact_id}, token_usage=usage
+        )
+
+    outline_review_artifact = _latest_artifact(project_id, "outline_review")
+    if outline_review_artifact is not None and _is_fresh(
+        outline_review_artifact.updated_at, outline_time
+    ):
+        artifact_ids.append(outline_review_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "outline_review",
+            {"artifact_id": outline_review_artifact.id},
+        )
+        outline_review_time = outline_review_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "outline_review",
+            {"outline": outline},
+        )
+        try:
+            if settings.llm_enabled:
+                outline_review, usage = review_outline(project, brief, outline)
+            else:
+                outline_review, usage = {
+                    "verdict": "pass",
+                    "issues": [],
+                    "recommended_changes": [],
+                    "notes": "Local fallback review passed.",
+                }, None
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "outline_review", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+
+        # Apply the reviewer's corrected outline so the review actually shapes
+        # the document instead of only being recorded.
+        revised_outline = outline_review.get("revised_outline")
+        revision_applied = False
+        if (
+            settings.llm_enabled
+            and isinstance(revised_outline, dict)
+            and isinstance(revised_outline.get("chapters"), list)
+            and revised_outline["chapters"]
+        ):
+            outline = revised_outline
+            revision_applied = True
+            with get_connection() as conn:
+                revised_outline_id = _insert_artifact(
+                    conn,
+                    project_id,
+                    "outline",
+                    "Revised outline",
+                    outline,
+                    utc_now_iso(),
+                    agent_name,
+                )
+            artifact_ids.append(revised_outline_id)
+        review_record = {
+            key: value
+            for key, value in outline_review.items()
+            if key != "revised_outline"
+        }
+        review_record["revision_applied"] = revision_applied
+        # Inserted after any revised outline so freshness ordering holds.
+        with get_connection() as conn:
+            review_artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "outline_review",
+                "Outline review",
+                review_record,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(review_artifact_id)
+        outline_review_artifact = get_artifact(project_id, review_artifact_id)
+        outline_review_time = (
+            outline_review_artifact.updated_at
+            if outline_review_artifact
+            else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {
+                "artifact_id": review_artifact_id,
+                "verdict": outline_review.get("verdict"),
+                "revision_applied": revision_applied,
+            },
+            token_usage=usage,
+        )
+
+    waiting_result: WorkflowRunRead | None = None
+    if settings.require_outline_approval:
+        approval = _latest_decision_for_phase(project_id, "outline_approval")
+        if approval is None or approval.created_at < outline_review_time:
+            waiting_at = utc_now_iso()
+            chapter_lines = "\n".join(
+                f"{chapter.get('id', '')}. {chapter.get('title', '')}"
+                for chapter in outline.get("chapters", [])
+                if isinstance(chapter, dict)
+            )
+            question_payload = {
+                "question": (
+                    "생성된 목차를 검토해 주세요. 이대로 작성을 진행하려면 답변을 남긴 뒤 "
+                    "다시 '작성 시작'을 눌러 주세요. (Review the outline below and answer "
+                    "to approve, then start writing again.)\n" + chapter_lines
+                ),
+                "reason": "Outline approval gate before section writing.",
+                "priority": "high",
+            }
+            with get_connection() as conn:
+                _insert_pending_question(
+                    conn,
+                    project_id,
+                    "outline_approval",
+                    question_payload,
+                    waiting_at,
+                )
+                conn.execute(
+                    """
+                    UPDATE projects
+                    SET status = ?, current_phase = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    ("waiting_for_user", "outline", waiting_at, project_id),
+                )
+            updated_project = get_project(project_id)
+            if updated_project is None:
+                raise RuntimeError(
+                    "Project disappeared while waiting for outline approval"
+                )
+            waiting_result = WorkflowRunRead(
+                project=updated_project,
+                artifacts=[],
+                pending_questions=list_pending_questions(project_id, status="pending"),
+                status="waiting_for_user",
+                message="Review and approve the outline, then start writing again.",
+            )
+
+    return OutlineStageResult(
+        outline=outline,
+        outline_review_time=outline_review_time,
+        artifact_ids=artifact_ids,
+        waiting_result=waiting_result,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -3160,172 +3369,20 @@ def _run_document_generation(
         doc_target = brief_result.doc_target
         artifact_ids.extend(brief_result.artifact_ids)
 
-        outline_artifact = _latest_artifact(project_id, "outline")
-        if outline_artifact is not None and _is_fresh(
-            outline_artifact.updated_at, brief_time
-        ):
-            outline = outline_artifact.content or {}
-            artifact_ids.append(outline_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "outline",
-                {"artifact_id": outline_artifact.id},
-            )
-            outline_time = outline_artifact.updated_at
-        else:
-            run_id = _start_agent_run(project_id, agent_name, "outline", {"brief": brief})
-            if settings.llm_enabled:
-                outline, usage = generate_outline(
-                    project, brief, profile=profile, doc_target=doc_target
-                )
-            else:
-                outline, usage = _local_outline(project, brief), None
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "outline",
-                        "Generated outline",
-                        outline,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            outline_artifact = get_artifact(project_id, artifact_ids[-1])
-            outline_time = outline_artifact.updated_at if outline_artifact else utc_now_iso()
-            _complete_agent_run(run_id, {"artifact_id": artifact_ids[-1]}, token_usage=usage)
-
-        outline_review_artifact = _latest_artifact(project_id, "outline_review")
-        if outline_review_artifact is not None and _is_fresh(
-            outline_review_artifact.updated_at, outline_time
-        ):
-            outline_review = outline_review_artifact.content or {}
-            artifact_ids.append(outline_review_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "outline_review",
-                {"artifact_id": outline_review_artifact.id},
-            )
-            outline_review_time = outline_review_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "outline_review",
-                {"outline": outline},
-            )
-            if settings.llm_enabled:
-                outline_review, usage = review_outline(project, brief, outline)
-            else:
-                outline_review, usage = {
-                    "verdict": "pass",
-                    "issues": [],
-                    "recommended_changes": [],
-                    "notes": "Local fallback review passed.",
-                }, None
-
-            # Apply the reviewer's corrected outline so the review actually
-            # shapes the document instead of only being recorded.
-            revised_outline = outline_review.get("revised_outline")
-            revision_applied = False
-            if (
-                settings.llm_enabled
-                and isinstance(revised_outline, dict)
-                and isinstance(revised_outline.get("chapters"), list)
-                and revised_outline["chapters"]
-            ):
-                outline = revised_outline
-                revision_applied = True
-                with get_connection() as conn:
-                    artifact_ids.append(
-                        _insert_artifact(
-                            conn,
-                            project_id,
-                            "outline",
-                            "Revised outline",
-                            outline,
-                            utc_now_iso(),
-                            agent_name,
-                        )
-                    )
-            review_record = {
-                key: value
-                for key, value in outline_review.items()
-                if key != "revised_outline"
-            }
-            review_record["revision_applied"] = revision_applied
-            # Inserted after any revised outline so freshness ordering holds.
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "outline_review",
-                        "Outline review",
-                        review_record,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            outline_review_artifact = get_artifact(project_id, artifact_ids[-1])
-            outline_review_time = (
-                outline_review_artifact.updated_at
-                if outline_review_artifact
-                else utc_now_iso()
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "verdict": outline_review.get("verdict"),
-                    "revision_applied": revision_applied,
-                },
-                token_usage=usage,
-            )
-
-        if settings.require_outline_approval:
-            approval = _latest_decision_for_phase(project_id, "outline_approval")
-            if approval is None or approval.created_at < outline_review_time:
-                waiting_at = utc_now_iso()
-                chapter_lines = "\n".join(
-                    f"{chapter.get('id', '')}. {chapter.get('title', '')}"
-                    for chapter in outline.get("chapters", [])
-                    if isinstance(chapter, dict)
-                )
-                question_payload = {
-                    "question": (
-                        "생성된 목차를 검토해 주세요. 이대로 작성을 진행하려면 답변을 남긴 뒤 "
-                        "다시 '작성 시작'을 눌러 주세요. (Review the outline below and answer "
-                        "to approve, then start writing again.)\n" + chapter_lines
-                    ),
-                    "reason": "Outline approval gate before section writing.",
-                    "priority": "high",
-                }
-                with get_connection() as conn:
-                    _insert_pending_question(
-                        conn, project_id, "outline_approval", question_payload, waiting_at
-                    )
-                    conn.execute(
-                        """
-                        UPDATE projects
-                        SET status = ?, current_phase = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        ("waiting_for_user", "outline", waiting_at, project_id),
-                    )
-                updated_project = get_project(project_id)
-                if updated_project is None:
-                    raise RuntimeError("Project disappeared while waiting for outline approval")
-                return WorkflowRunRead(
-                    project=updated_project,
-                    artifacts=[],
-                    pending_questions=list_pending_questions(project_id, status="pending"),
-                    status="waiting_for_user",
-                    message="Review and approve the outline, then start writing again.",
-                )
+        outline_result = _run_outline_stage(
+            project_id,
+            project,
+            brief,
+            profile,
+            agent_name,
+            brief_time,
+            doc_target,
+        )
+        if outline_result.waiting_result is not None:
+            return outline_result.waiting_result
+        outline = outline_result.outline
+        outline_review_time = outline_result.outline_review_time
+        artifact_ids.extend(outline_result.artifact_ids)
 
         default_length = int(profile.get("default_section_length", 500))
         section_plan_artifact = _latest_artifact(project_id, "section_plan")
