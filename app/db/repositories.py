@@ -2585,6 +2585,14 @@ class ResearchStageResult:
     artifact_ids: list[str]
 
 
+@dataclass(frozen=True)
+class BriefStageResult:
+    brief: Dict[str, Any]
+    brief_time: str
+    doc_target: int
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -2986,6 +2994,76 @@ def _run_research_stage(
     )
 
 
+def _run_brief_stage(
+    project_id: str,
+    project: ProjectRead,
+    decisions: list[UserDecisionRead],
+    research: Dict[str, Any],
+    profile: Dict[str, Any],
+    style_card: Dict[str, Any] | None,
+    agent_name: str,
+    input_cutoff: str,
+    research_cutoff: str,
+    source_summary_time: str,
+) -> BriefStageResult:
+    """Build or reuse the document brief and resolve its length budget."""
+    artifact_ids: list[str] = []
+    brief_artifact = _latest_artifact(project_id, "brief")
+    brief_cutoff = max(input_cutoff, research_cutoff, source_summary_time)
+    if brief_artifact is not None and _is_fresh(
+        brief_artifact.updated_at, brief_cutoff
+    ):
+        brief = brief_artifact.content or {}
+        artifact_ids.append(brief_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "brief",
+            {"artifact_id": brief_artifact.id},
+        )
+        brief_time = brief_artifact.updated_at
+    else:
+        run_id = _start_agent_run(project_id, agent_name, "brief", {})
+        try:
+            if settings.llm_enabled:
+                brief, usage = generate_brief(
+                    project, decisions, research, profile=profile
+                )
+            else:
+                brief, usage = _local_brief(project, decisions, research), None
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "brief", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "brief",
+                "Generated brief",
+                brief,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        brief_artifact = get_artifact(project_id, artifact_id)
+        brief_time = brief_artifact.updated_at if brief_artifact else utc_now_iso()
+        _complete_agent_run(
+            run_id, {"artifact_id": artifact_id}, token_usage=usage
+        )
+
+    # The style card is authoritative for register: downstream prompts read
+    # brief["style"], while the stored artifact keeps the original register.
+    if style_card and str(style_card.get("register") or "").strip():
+        brief = {**brief, "style": str(style_card["register"]).strip()}
+
+    return BriefStageResult(
+        brief=brief,
+        brief_time=brief_time,
+        doc_target=_document_target_length(project_id, brief),
+        artifact_ids=artifact_ids,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -3065,41 +3143,22 @@ def _run_document_generation(
         source_summary_time = research_result.source_summary_time
         artifact_ids.extend(research_result.artifact_ids)
 
-        brief_artifact = _latest_artifact(project_id, "brief")
-        brief_cutoff = max(input_cutoff, research_cutoff, source_summary_time)
-        if brief_artifact is not None and _is_fresh(brief_artifact.updated_at, brief_cutoff):
-            brief = brief_artifact.content or {}
-            artifact_ids.append(brief_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "brief",
-                {"artifact_id": brief_artifact.id},
-            )
-            brief_time = brief_artifact.updated_at
-        else:
-            run_id = _start_agent_run(project_id, agent_name, "brief", {})
-            if settings.llm_enabled:
-                brief, usage = generate_brief(project, decisions, research, profile=profile)
-            else:
-                brief, usage = _local_brief(project, decisions, research), None
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn, project_id, "brief", "Generated brief", brief, utc_now_iso(), agent_name
-                    )
-                )
-            brief_artifact = get_artifact(project_id, artifact_ids[-1])
-            brief_time = brief_artifact.updated_at if brief_artifact else utc_now_iso()
-            _complete_agent_run(run_id, {"artifact_id": artifact_ids[-1]}, token_usage=usage)
-
-        # The style card is authoritative for register: downstream prompts read
-        # brief["style"], so override the in-memory brief (the stored brief
-        # artifact keeps the model's original register).
-        if style_card and str(style_card.get("register") or "").strip():
-            brief = {**brief, "style": str(style_card["register"]).strip()}
-
-        doc_target = _document_target_length(project_id, brief)
+        brief_result = _run_brief_stage(
+            project_id,
+            project,
+            decisions,
+            research,
+            profile,
+            style_card,
+            agent_name,
+            input_cutoff,
+            research_cutoff,
+            source_summary_time,
+        )
+        brief = brief_result.brief
+        brief_time = brief_result.brief_time
+        doc_target = brief_result.doc_target
+        artifact_ids.extend(brief_result.artifact_ids)
 
         outline_artifact = _latest_artifact(project_id, "outline")
         if outline_artifact is not None and _is_fresh(
