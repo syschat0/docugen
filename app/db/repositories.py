@@ -2648,6 +2648,14 @@ class DocumentReviewStageResult:
     artifact_ids: list[str]
 
 
+@dataclass(frozen=True)
+class TargetedRevisionStageResult:
+    section_drafts: list[Dict[str, Any]]
+    revision: Dict[str, Any]
+    revision_time: str
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -4058,6 +4066,144 @@ def _run_document_review_stage(
     )
 
 
+def _run_targeted_revision_stage(
+    project_id: str,
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    section_drafts: list[Dict[str, Any]],
+    continuity: Dict[str, Any],
+    rubric_review: Dict[str, Any],
+    combined_review: Dict[str, Any],
+    rubric_time: str,
+    agent_name: str,
+) -> TargetedRevisionStageResult:
+    """Apply review targets and bounded sentence-quality repair."""
+    revision_artifact = _latest_artifact(project_id, "targeted_revision")
+    if revision_artifact is not None and _is_fresh(
+        revision_artifact.updated_at, rubric_time
+    ):
+        revision = revision_artifact.content or {}
+        revised_sections = revision.get("sections")
+        if isinstance(revised_sections, list) and revised_sections:
+            section_drafts = apply_section_revisions(
+                section_drafts, revised_sections
+            )
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "targeted_revision",
+            {"artifact_id": revision_artifact.id},
+        )
+        return TargetedRevisionStageResult(
+            section_drafts=section_drafts,
+            revision=revision,
+            revision_time=revision_artifact.updated_at,
+            artifact_ids=[revision_artifact.id],
+        )
+
+    run_id = _start_agent_run(
+        project_id,
+        agent_name,
+        "targeted_revision",
+        {
+            "continuity_verdict": continuity.get("verdict"),
+            "rubric_verdict": rubric_review.get("verdict"),
+            "target_count": len(combined_review.get("revision_targets") or []),
+        },
+    )
+    try:
+        if settings.llm_enabled:
+            revised_sections, usage = revise_targeted_sections(
+                project, brief, section_drafts, combined_review
+            )
+        else:
+            revised_sections, usage = section_drafts, None
+        merged_sections = apply_section_revisions(section_drafts, revised_sections)
+        sentence_repair_report: Dict[str, Any] = {
+            "enabled": bool(
+                settings.llm_enabled
+                and getattr(settings, "sentence_quality_repair_enabled", True)
+            ),
+            "attempted": False,
+            "initial_issue_count": 0,
+            "final_issue_count": 0,
+            "attempted_section_count": 0,
+            "repaired_section_count": 0,
+            "results": [],
+            "remaining_issues": [],
+        }
+        sentence_repair_usage = None
+        if sentence_repair_report["enabled"]:
+            project_text = f"{project.title} {project.initial_request}"
+            high_stakes = is_high_stakes_topic(project_text)
+            initial_sentence_quality = sentence_quality_stats(
+                merged_sections,
+                high_stakes=high_stakes,
+            )
+            if initial_sentence_quality["issue_count"]:
+                (
+                    merged_sections,
+                    sentence_repair_report,
+                    sentence_repair_usage,
+                ) = repair_sentence_quality_sections(
+                    project,
+                    brief,
+                    merged_sections,
+                    initial_sentence_quality,
+                    high_stakes=high_stakes,
+                    limit=getattr(settings, "sentence_quality_repair_limit", 3),
+                )
+                sentence_repair_report["enabled"] = True
+    except LLMError as exc:
+        _fail_pipeline_stage(project_id, run_id, "targeted_revision", exc)
+        raise WorkflowRunFailedError(str(exc)) from exc
+
+    revision = {
+        "sections": merged_sections,
+        "changed": merged_sections != section_drafts,
+        "continuity_verdict": continuity.get("verdict"),
+        "rubric_verdict": rubric_review.get("verdict"),
+        "sentence_quality_repair": sentence_repair_report,
+    }
+    section_drafts = merged_sections
+    with get_connection() as conn:
+        artifact_id = _insert_artifact(
+            conn,
+            project_id,
+            "targeted_revision",
+            "Targeted revision",
+            revision,
+            utc_now_iso(),
+            agent_name,
+        )
+    revision_artifact = get_artifact(project_id, artifact_id)
+    revision_time = (
+        revision_artifact.updated_at if revision_artifact else utc_now_iso()
+    )
+    _complete_agent_run(
+        run_id,
+        {
+            "artifact_id": artifact_id,
+            "changed": revision["changed"],
+            "sentence_quality_repair": sentence_repair_report,
+        },
+        token_usage=(
+            {
+                "reviewer_revision": usage,
+                "sentence_quality_repair": sentence_repair_usage,
+            }
+            if usage or sentence_repair_usage
+            else None
+        ),
+    )
+    return TargetedRevisionStageResult(
+        section_drafts=section_drafts,
+        revision=revision,
+        revision_time=revision_time,
+        artifact_ids=[artifact_id],
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -4481,115 +4627,21 @@ def _run_document_generation(
         rubric_time = review_result.rubric_time
         artifact_ids.extend(review_result.artifact_ids)
 
-        revision_artifact = _latest_artifact(project_id, "targeted_revision")
-        if revision_artifact is not None and _is_fresh(
-            revision_artifact.updated_at, rubric_time
-        ):
-            revision = revision_artifact.content or {}
-            revised_sections = revision.get("sections")
-            if isinstance(revised_sections, list) and revised_sections:
-                section_drafts = apply_section_revisions(section_drafts, revised_sections)
-            artifact_ids.append(revision_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "targeted_revision",
-                {"artifact_id": revision_artifact.id},
-            )
-            revision_time = revision_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "targeted_revision",
-                {
-                    "continuity_verdict": continuity.get("verdict"),
-                    "rubric_verdict": rubric_review.get("verdict"),
-                    "target_count": len(combined_review.get("revision_targets") or []),
-                },
-            )
-            if settings.llm_enabled:
-                revised_sections, usage = revise_targeted_sections(
-                    project, brief, section_drafts, combined_review
-                )
-            else:
-                revised_sections, usage = section_drafts, None
-            merged_sections = apply_section_revisions(section_drafts, revised_sections)
-            sentence_repair_report: Dict[str, Any] = {
-                "enabled": bool(
-                    settings.llm_enabled
-                    and getattr(settings, "sentence_quality_repair_enabled", True)
-                ),
-                "attempted": False,
-                "initial_issue_count": 0,
-                "final_issue_count": 0,
-                "attempted_section_count": 0,
-                "repaired_section_count": 0,
-                "results": [],
-                "remaining_issues": [],
-            }
-            sentence_repair_usage = None
-            if sentence_repair_report["enabled"]:
-                initial_sentence_quality = sentence_quality_stats(
-                    merged_sections,
-                    high_stakes=is_high_stakes_topic(
-                        f"{project.title} {project.initial_request}"
-                    ),
-                )
-                if initial_sentence_quality["issue_count"]:
-                    (
-                        merged_sections,
-                        sentence_repair_report,
-                        sentence_repair_usage,
-                    ) = repair_sentence_quality_sections(
-                        project,
-                        brief,
-                        merged_sections,
-                        initial_sentence_quality,
-                        high_stakes=is_high_stakes_topic(
-                            f"{project.title} {project.initial_request}"
-                        ),
-                        limit=getattr(settings, "sentence_quality_repair_limit", 3),
-                    )
-                    sentence_repair_report["enabled"] = True
-            revision = {
-                "sections": merged_sections,
-                "changed": merged_sections != section_drafts,
-                "continuity_verdict": continuity.get("verdict"),
-                "rubric_verdict": rubric_review.get("verdict"),
-                "sentence_quality_repair": sentence_repair_report,
-            }
-            section_drafts = merged_sections
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "targeted_revision",
-                        "Targeted revision",
-                        revision,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            revision_artifact = get_artifact(project_id, artifact_ids[-1])
-            revision_time = revision_artifact.updated_at if revision_artifact else utc_now_iso()
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "changed": revision["changed"],
-                    "sentence_quality_repair": sentence_repair_report,
-                },
-                token_usage=(
-                    {
-                        "reviewer_revision": usage,
-                        "sentence_quality_repair": sentence_repair_usage,
-                    }
-                    if usage or sentence_repair_usage
-                    else None
-                ),
-            )
+        revision_result = _run_targeted_revision_stage(
+            project_id,
+            project,
+            brief,
+            section_drafts,
+            continuity,
+            rubric_review,
+            combined_review,
+            rubric_time,
+            agent_name,
+        )
+        section_drafts = revision_result.section_drafts
+        revision = revision_result.revision
+        revision_time = revision_result.revision_time
+        artifact_ids.extend(revision_result.artifact_ids)
 
         citation_style = effective_citation_style(project_id)
         draft_artifact = _latest_artifact(project_id, "draft")

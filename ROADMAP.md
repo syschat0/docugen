@@ -64,7 +64,8 @@
       - [x] 3-1k. 단일 섹션 작성·요약·근거 검증/복구를 `_write_planned_section`으로 추출
       - [x] 3-1l. 초안 이후 섹션 피드백 적용을 `_run_feedback_revision_stage`로 추출
       - [x] 3-1m. 연속성·유형별 루브릭 검토를 `_run_document_review_stage`로 추출
-      - [ ] 3-1n. 신규 섹션 순회/저장 및 타깃 수정 실행 블록 추출
+      - [x] 3-1n. 검토 기반 타깃 수정·문장 품질 제한 복구를 `_run_targeted_revision_stage`로 추출
+      - [ ] 3-1o. 신규 섹션 순회/저장 실행 블록 추출
 - [ ] 3-2. 유형 프로파일에 따라 리서치·인용 스테이지 조건부 실행
       (M1의 citation_style과 연결: 인용 자체의 on/off는 유형이 결정)
 
