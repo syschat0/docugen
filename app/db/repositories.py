@@ -2601,6 +2601,14 @@ class OutlineStageResult:
     waiting_result: WorkflowRunRead | None = None
 
 
+@dataclass(frozen=True)
+class SectionPlanStageResult:
+    section_plan: Dict[str, Any]
+    sections: list[Dict[str, Any]]
+    section_plan_review_time: str
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -3273,6 +3281,204 @@ def _run_outline_stage(
     )
 
 
+def _run_section_plan_stage(
+    project_id: str,
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    outline: Dict[str, Any],
+    research: Dict[str, Any],
+    profile: Dict[str, Any],
+    agent_name: str,
+    outline_review_time: str,
+    doc_target: int,
+) -> SectionPlanStageResult:
+    """Build, review, and length-balance the per-section writing plan."""
+    artifact_ids: list[str] = []
+    default_length = int(profile.get("default_section_length", 500))
+    section_plan_artifact = _latest_artifact(project_id, "section_plan")
+    if section_plan_artifact is not None and _is_fresh(
+        section_plan_artifact.updated_at, outline_review_time
+    ):
+        section_plan = _normalize_section_plan(
+            section_plan_artifact.content or {}, default_length
+        )
+        sections = section_plan.get("sections", [])
+        artifact_ids.append(section_plan_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "section_plan",
+            {
+                "artifact_id": section_plan_artifact.id,
+                "section_count": len(sections),
+            },
+        )
+        section_plan_time = section_plan_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id, agent_name, "section_plan", {"outline": outline}
+        )
+        try:
+            if settings.llm_enabled:
+                section_plan, usage = generate_section_plan(
+                    project,
+                    brief,
+                    outline,
+                    research,
+                    profile=profile,
+                    doc_target=doc_target,
+                )
+            else:
+                section_plan, usage = _local_section_plan(outline), None
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "section_plan", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        section_plan = _normalize_section_plan(section_plan, default_length)
+        sections = section_plan["sections"]
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "section_plan",
+                "Generated section plan",
+                section_plan,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        section_plan_artifact = get_artifact(project_id, artifact_id)
+        section_plan_time = (
+            section_plan_artifact.updated_at
+            if section_plan_artifact
+            else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {"artifact_id": artifact_id, "section_count": len(sections)},
+            token_usage=usage,
+        )
+
+    section_plan_review_artifact = _latest_artifact(
+        project_id, "section_plan_review"
+    )
+    if section_plan_review_artifact is not None and _is_fresh(
+        section_plan_review_artifact.updated_at, section_plan_time
+    ):
+        artifact_ids.append(section_plan_review_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "section_plan_review",
+            {"artifact_id": section_plan_review_artifact.id},
+        )
+        section_plan_review_time = section_plan_review_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "section_plan_review",
+            {"section_count": len(sections)},
+        )
+        try:
+            if settings.llm_enabled:
+                section_plan_review, usage = review_section_plan(
+                    project, brief, section_plan
+                )
+            else:
+                section_plan_review, usage = {
+                    "verdict": "pass",
+                    "issues": [],
+                    "recommended_changes": [],
+                    "notes": "Local fallback review passed.",
+                }, None
+
+            # Re-expand chapters the reviewer flagged so the review is applied.
+            revision_applied = False
+            nodes_to_expand = section_plan_review.get("nodes_to_expand")
+            if (
+                settings.llm_enabled
+                and isinstance(nodes_to_expand, list)
+                and nodes_to_expand
+            ):
+                revised_plan, revise_usage = _reexpand_section_plan(
+                    project,
+                    brief,
+                    section_plan,
+                    section_plan_review,
+                    nodes_to_expand,
+                    profile=profile,
+                )
+                if revised_plan is not None:
+                    section_plan = _normalize_section_plan(
+                        revised_plan, default_length
+                    )
+                    sections = section_plan["sections"]
+                    revision_applied = True
+                    if revise_usage and usage:
+                        usage = {"review": usage, "reexpand": revise_usage}
+                    elif revise_usage:
+                        usage = {"reexpand": revise_usage}
+                    with get_connection() as conn:
+                        revised_plan_id = _insert_artifact(
+                            conn,
+                            project_id,
+                            "section_plan",
+                            "Revised section plan",
+                            section_plan,
+                            utc_now_iso(),
+                            agent_name,
+                        )
+                    artifact_ids.append(revised_plan_id)
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "section_plan_review", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+
+        section_plan_review = {
+            **section_plan_review,
+            "revision_applied": revision_applied,
+        }
+        # Inserted after any revised plan so freshness ordering holds.
+        with get_connection() as conn:
+            review_artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "section_plan_review",
+                "Section plan review",
+                section_plan_review,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(review_artifact_id)
+        section_plan_review_artifact = get_artifact(
+            project_id, review_artifact_id
+        )
+        section_plan_review_time = (
+            section_plan_review_artifact.updated_at
+            if section_plan_review_artifact
+            else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {
+                "artifact_id": review_artifact_id,
+                "verdict": section_plan_review.get("verdict"),
+                "revision_applied": revision_applied,
+            },
+            token_usage=usage,
+        )
+
+    # Stored plan artifacts keep the model's original lengths; the run-time
+    # budget re-flows whichever plan survived review.
+    section_plan = _scale_section_lengths(section_plan, doc_target)
+    sections = section_plan["sections"]
+    return SectionPlanStageResult(
+        section_plan=section_plan,
+        sections=sections,
+        section_plan_review_time=section_plan_review_time,
+        artifact_ids=artifact_ids,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -3384,153 +3590,21 @@ def _run_document_generation(
         outline_review_time = outline_result.outline_review_time
         artifact_ids.extend(outline_result.artifact_ids)
 
-        default_length = int(profile.get("default_section_length", 500))
-        section_plan_artifact = _latest_artifact(project_id, "section_plan")
-        if section_plan_artifact is not None and _is_fresh(
-            section_plan_artifact.updated_at, outline_review_time
-        ):
-            section_plan = section_plan_artifact.content or {}
-            section_plan = _normalize_section_plan(section_plan, default_length)
-            sections = section_plan.get("sections", [])
-            artifact_ids.append(section_plan_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "section_plan",
-                {
-                    "artifact_id": section_plan_artifact.id,
-                    "section_count": len(sections),
-                },
-            )
-            section_plan_time = section_plan_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id, agent_name, "section_plan", {"outline": outline}
-            )
-            if settings.llm_enabled:
-                section_plan, usage = generate_section_plan(
-                    project, brief, outline, research, profile=profile,
-                    doc_target=doc_target,
-                )
-            else:
-                section_plan, usage = _local_section_plan(outline), None
-            section_plan = _normalize_section_plan(section_plan, default_length)
-            sections = section_plan["sections"]
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "section_plan",
-                        "Generated section plan",
-                        section_plan,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            section_plan_artifact = get_artifact(project_id, artifact_ids[-1])
-            section_plan_time = section_plan_artifact.updated_at if section_plan_artifact else utc_now_iso()
-            _complete_agent_run(
-                run_id,
-                {"artifact_id": artifact_ids[-1], "section_count": len(sections)},
-                token_usage=usage,
-            )
-
-        section_plan_review_artifact = _latest_artifact(project_id, "section_plan_review")
-        if section_plan_review_artifact is not None and _is_fresh(
-            section_plan_review_artifact.updated_at, section_plan_time
-        ):
-            section_plan_review = section_plan_review_artifact.content or {}
-            artifact_ids.append(section_plan_review_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "section_plan_review",
-                {"artifact_id": section_plan_review_artifact.id},
-            )
-            section_plan_review_time = section_plan_review_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "section_plan_review",
-                {"section_count": len(sections)},
-            )
-            if settings.llm_enabled:
-                section_plan_review, usage = review_section_plan(
-                    project, brief, section_plan
-                )
-            else:
-                section_plan_review, usage = {
-                    "verdict": "pass",
-                    "issues": [],
-                    "recommended_changes": [],
-                    "notes": "Local fallback review passed.",
-                }, None
-
-            # Re-expand chapters the reviewer flagged so the review is applied.
-            revision_applied = False
-            nodes_to_expand = section_plan_review.get("nodes_to_expand")
-            if settings.llm_enabled and isinstance(nodes_to_expand, list) and nodes_to_expand:
-                revised_plan, revise_usage = _reexpand_section_plan(
-                    project, brief, section_plan, section_plan_review, nodes_to_expand,
-                    profile=profile,
-                )
-                if revised_plan is not None:
-                    section_plan = _normalize_section_plan(revised_plan, default_length)
-                    sections = section_plan["sections"]
-                    revision_applied = True
-                    if revise_usage and usage:
-                        usage = {"review": usage, "reexpand": revise_usage}
-                    elif revise_usage:
-                        usage = {"reexpand": revise_usage}
-                    with get_connection() as conn:
-                        artifact_ids.append(
-                            _insert_artifact(
-                                conn,
-                                project_id,
-                                "section_plan",
-                                "Revised section plan",
-                                section_plan,
-                                utc_now_iso(),
-                                agent_name,
-                            )
-                        )
-            section_plan_review = {**section_plan_review, "revision_applied": revision_applied}
-            # Inserted after any revised plan so freshness ordering holds.
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "section_plan_review",
-                        "Section plan review",
-                        section_plan_review,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            section_plan_review_artifact = get_artifact(project_id, artifact_ids[-1])
-            section_plan_review_time = (
-                section_plan_review_artifact.updated_at
-                if section_plan_review_artifact
-                else utc_now_iso()
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "verdict": section_plan_review.get("verdict"),
-                    "revision_applied": revision_applied,
-                },
-                token_usage=usage,
-            )
-
-        # Apply the document length budget to whichever plan survived review.
-        # Stored plan artifacts keep the model's original lengths; the budget
-        # re-flows them at run time, so changing it never rewrites the plan.
-        section_plan = _scale_section_lengths(section_plan, doc_target)
-        sections = section_plan["sections"]
+        section_plan_result = _run_section_plan_stage(
+            project_id,
+            project,
+            brief,
+            outline,
+            research,
+            profile,
+            agent_name,
+            outline_review_time,
+            doc_target,
+        )
+        section_plan = section_plan_result.section_plan
+        sections = section_plan_result.sections
+        section_plan_review_time = section_plan_result.section_plan_review_time
+        artifact_ids.extend(section_plan_result.artifact_ids)
 
         chapter_sources_artifact = _latest_artifact(project_id, "chapter_sources")
         if chapter_sources_artifact is not None and _is_fresh(
