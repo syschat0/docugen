@@ -18,6 +18,7 @@ REQUIRED_FIELDS = (
     "label_ko",
     "research_default",
     "citations_enabled",
+    "intake_priorities",
     "numbered_headings",
     "default_section_length",
     "classify_hint",
@@ -60,6 +61,12 @@ class TestRegistry:
         choices = doc_type_choices()
         assert [choice["key"] for choice in choices] == list(DOC_TYPES)
         assert all(choice["label_ko"] and choice["label_en"] for choice in choices)
+
+    def test_intake_priorities_are_short_ordered_checklists(self):
+        for key, profile in DOC_TYPES.items():
+            priorities = profile["intake_priorities"]
+            assert 3 <= len(priorities) <= 5, key
+            assert all(isinstance(item, str) and item.strip() for item in priorities)
 
 
 class TestSchemas:

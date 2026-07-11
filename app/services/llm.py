@@ -532,6 +532,27 @@ def _type_block(profile: Dict[str, Any] | None, guidance_key: str) -> str:
     )
 
 
+def _intake_priority_block(profile: Dict[str, Any] | None) -> str:
+    """Compact, genre-specific checklist for deciding what is truly missing."""
+    profile = profile or get_doc_type_profile(None)
+    priorities = [
+        str(item).strip()
+        for item in (profile.get("intake_priorities") or [])
+        if str(item).strip()
+    ][:5]
+    if not priorities:
+        return ""
+    checklist = "\n".join(
+        f"{index}. {item}" for index, item in enumerate(priorities, start=1)
+    )
+    return (
+        "\nDocument-type intake priorities (ordered):\n"
+        f"{checklist}\n"
+        "Use this only as a missing-information checklist. Infer answers from the "
+        "request and known answers; do not ask every item mechanically.\n"
+    )
+
+
 def classify_document_type(
     project: ProjectRead,
 ) -> tuple[str, dict[str, Any] | None]:
@@ -585,13 +606,15 @@ Project title:
 Initial request:
 {project.initial_request}
 {_type_block(profile, "brief_guidance")}
+{_intake_priority_block(profile)}
 Known user answers:
 {decision_lines}
 
 Decide whether more user input is needed before writing.
 Ask at most 5 questions. Do not ask questions already answered above.
-Ask about what matters for this document type (audience, occasion, scope,
-register, target length) rather than generic details.
+Prefer the highest-priority unresolved item from the document-type checklist
+over generic questions. Combine closely related missing items when one concise
+question can resolve them.
 Write every "question" and "reason" value in the SAME LANGUAGE as the initial
 request above (a Korean request gets Korean questions), regardless of the
 language of these instructions.

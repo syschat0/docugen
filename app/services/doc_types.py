@@ -12,6 +12,8 @@ Profile fields:
   gate still applies (a profile cannot re-enable globally disabled search).
 - citations_enabled: whether inline citation markers and the Sources
   section belong in the final document.
+- intake_priorities: ordered missing-information checks for the intake agent.
+  These are guidance, not questions that must all be asked.
 - numbered_headings: whether section headings carry "1.2"-style numbers.
 - default_section_length: target body characters per section.
 - style_hint: default sentence register, used when the user's request does
@@ -41,6 +43,12 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         "label_ko": "보고서·브리프",
         "research_default": True,
         "citations_enabled": True,
+        "intake_priorities": [
+            "The reader and the decision or action this report should support.",
+            "Scope boundaries, comparison targets, and relevant time period.",
+            "Required facts, metrics, organizations, or supplied evidence.",
+            "Desired length, delivery format, and deadline if they constrain depth.",
+        ],
         "numbered_headings": True,
         "default_section_length": 500,
         "classify_hint": (
@@ -78,6 +86,12 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         "label_ko": "소논문 (학교 과제)",
         "research_default": True,
         "citations_enabled": True,
+        "intake_priorities": [
+            "The exact research question or thesis the paper must answer.",
+            "Course, subject level, audience, and required academic format.",
+            "Required sources, citation rules, or evidence restrictions.",
+            "Length and any mandatory sections, methods, or comparison cases.",
+        ],
         "numbered_headings": True,
         "default_section_length": 600,
         "classify_hint": (
@@ -119,6 +133,12 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         "label_ko": "블로그·칼럼",
         "research_default": True,
         "citations_enabled": True,
+        "intake_priorities": [
+            "Target reader, publishing channel, and what should earn attention.",
+            "The one takeaway or call to action readers should leave with.",
+            "Writer persona, stance, and preferred conversational register.",
+            "Desired length and concrete examples or stories that must appear.",
+        ],
         "numbered_headings": False,
         "default_section_length": 350,
         "classify_hint": (
@@ -158,6 +178,12 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         "label_ko": "에세이·논설문",
         "research_default": False,
         "citations_enabled": False,
+        "intake_priorities": [
+            "The single thesis, experience, or emotional through-line.",
+            "Intended reader and the occasion or reason for writing.",
+            "Point of view, mood, and how personal or argumentative it should be.",
+            "Scenes, images, arguments, or ending effect that must be included.",
+        ],
         "numbered_headings": False,
         "default_section_length": 450,
         "classify_hint": (
@@ -198,6 +224,12 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         "label_ko": "기술 문서·매뉴얼",
         "research_default": True,
         "citations_enabled": True,
+        "intake_priorities": [
+            "Reader role, prior knowledge, environment, and relevant versions.",
+            "The exact task or successful end state the document must enable.",
+            "Prerequisites, constraints, failure cases, and safety boundaries.",
+            "Required commands, examples, screenshots, or reference format.",
+        ],
         "numbered_headings": True,
         "default_section_length": 500,
         "classify_hint": (
@@ -238,6 +270,12 @@ DOC_TYPES: Dict[str, Dict[str, Any]] = {
         "label_ko": "발표 대본",
         "research_default": True,
         "citations_enabled": False,
+        "intake_priorities": [
+            "Audience, event, and why the topic matters in that room.",
+            "Target speaking time and whether slides or demonstrations accompany it.",
+            "The single key message and action or feeling for the closing.",
+            "Speaker persona, formality, and required greeting or acknowledgements.",
+        ],
         "numbered_headings": False,
         "default_section_length": 400,
         "classify_hint": (

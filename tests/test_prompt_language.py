@@ -9,6 +9,7 @@ again.
 from types import SimpleNamespace
 
 from app.services import llm
+from app.services.doc_types import get_doc_type_profile
 
 
 def _capture_json_chat(monkeypatch, response):
@@ -35,6 +36,15 @@ class TestSameLanguageInstructions:
         llm.plan_user_questions(_project(), [])
         assert "SAME LANGUAGE" in captured["user"]
         assert "same language" in captured["system"]
+
+    def test_intake_prompt_uses_only_selected_type_priorities(self, monkeypatch):
+        captured = _capture_json_chat(monkeypatch, {"needs_questions": False})
+        llm.plan_user_questions(
+            _project(), [], profile=get_doc_type_profile("academic_paper")
+        )
+        assert "exact research question or thesis" in captured["user"]
+        assert "publishing channel" not in captured["user"]
+        assert "do not ask every item mechanically" in captured["user"]
 
     def test_brief_prompt_demands_request_language(self, monkeypatch):
         captured = _capture_json_chat(monkeypatch, {"topic": "t"})
