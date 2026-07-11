@@ -60,7 +60,8 @@
       - [x] 3-1g. outline 생성·검토·수정 적용·승인 대기를 `_run_outline_stage`로 추출
       - [x] 3-1h. section plan 생성·검토·재확장·길이 재배분을 `_run_section_plan_stage`로 추출
       - [x] 3-1i. 장별 출처 생성·재사용을 `_run_chapter_research_stage`로 추출
-      - [ ] 3-1j. 섹션 작성/요약/검토 실행 블록 순차 추출
+      - [x] 3-1j. 최신 섹션 초안·요약 재사용 경로를 `_reuse_section_writing_stage`로 추출
+      - [ ] 3-1k. 신규 섹션 작성/요약/검토 실행 블록 순차 추출
 - [ ] 3-2. 유형 프로파일에 따라 리서치·인용 스테이지 조건부 실행
       (M1의 citation_style과 연결: 인용 자체의 on/off는 유형이 결정)
 

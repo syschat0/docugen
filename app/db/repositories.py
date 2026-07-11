@@ -2617,6 +2617,14 @@ class ChapterResearchStageResult:
     artifact_ids: list[str]
 
 
+@dataclass(frozen=True)
+class SectionWritingStageResult:
+    section_drafts: list[Dict[str, Any]]
+    summaries: list[Dict[str, Any]]
+    section_work_time: str
+    artifact_ids: list[str]
+
+
 def _waiting_for_user_result(project_id: str) -> WorkflowRunRead | None:
     existing_pending = list_pending_questions(project_id, status="pending")
     if not existing_pending:
@@ -3562,6 +3570,62 @@ def _run_chapter_research_stage(
     )
 
 
+def _reuse_section_writing_stage(
+    project_id: str,
+    sections: list[Dict[str, Any]],
+    agent_name: str,
+    chapter_research_time: str,
+    section_plan_time: str,
+) -> SectionWritingStageResult | None:
+    """Return the complete cached writing result only when drafts and summaries align."""
+    reusable_drafts = _reusable_section_drafts(
+        project_id,
+        sections,
+        chapter_research_time,
+    )
+    reusable_summaries = _reusable_section_summaries(project_id, sections)
+    if reusable_drafts is None or reusable_summaries is None:
+        return None
+
+    section_draft_ids = [
+        draft["artifact_id"]
+        for draft in reusable_drafts
+        if draft.get("artifact_id")
+    ]
+    _complete_reuse_run(
+        project_id,
+        agent_name,
+        "section_writing",
+        {
+            "section_artifact_ids": section_draft_ids,
+            "summary_mode": "combined_with_writing",
+        },
+    )
+    _complete_reuse_run(
+        project_id,
+        agent_name,
+        "section_summary",
+        {
+            "summary_count": len(reusable_summaries),
+            "summary_mode": "combined_with_writing",
+        },
+    )
+    section_work_time = max(
+        [
+            draft["updated_at"]
+            for draft in reusable_drafts
+            if draft.get("updated_at")
+        ]
+        or [section_plan_time]
+    )
+    return SectionWritingStageResult(
+        section_drafts=reusable_drafts,
+        summaries=reusable_summaries,
+        section_work_time=section_work_time,
+        artifact_ids=section_draft_ids,
+    )
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -3701,47 +3765,24 @@ def _run_document_generation(
         chapter_research_time = chapter_research_result.chapter_research_time
         artifact_ids.extend(chapter_research_result.artifact_ids)
 
-        section_drafts: list[Dict[str, Any]] = []
-        summaries: list[Dict[str, Any]] = []
-        summary_ids: list[str] = []
-        previous_summary: Dict[str, Any] | None = None
-        writing_usage: list[Dict[str, Any]] = []
-        reusable_drafts = _reusable_section_drafts(
+        writing_result = _reuse_section_writing_stage(
             project_id,
             sections,
+            agent_name,
             chapter_research_time,
+            section_plan_time,
         )
-        reusable_summaries = _reusable_section_summaries(project_id, sections)
-        if reusable_drafts is not None and reusable_summaries is not None:
-            section_drafts = reusable_drafts
-            summaries = reusable_summaries
-            section_draft_ids = [
-                draft["artifact_id"] for draft in reusable_drafts if draft.get("artifact_id")
-            ]
-            artifact_ids.extend(section_draft_ids)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "section_writing",
-                {
-                    "section_artifact_ids": section_draft_ids,
-                    "summary_mode": "combined_with_writing",
-                },
-            )
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "section_summary",
-                {
-                    "summary_count": len(summaries),
-                    "summary_mode": "combined_with_writing",
-                },
-            )
-            section_work_time = max(
-                [draft["updated_at"] for draft in reusable_drafts if draft.get("updated_at")]
-                or [section_plan_time]
-            )
+        if writing_result is not None:
+            section_drafts = writing_result.section_drafts
+            summaries = writing_result.summaries
+            section_work_time = writing_result.section_work_time
+            artifact_ids.extend(writing_result.artifact_ids)
         else:
+            section_drafts: list[Dict[str, Any]] = []
+            summaries: list[Dict[str, Any]] = []
+            summary_ids: list[str] = []
+            previous_summary: Dict[str, Any] | None = None
+            writing_usage: list[Dict[str, Any]] = []
             run_id = _start_agent_run(
                 project_id,
                 agent_name,
