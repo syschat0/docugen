@@ -2605,7 +2605,15 @@ class OutlineStageResult:
 class SectionPlanStageResult:
     section_plan: Dict[str, Any]
     sections: list[Dict[str, Any]]
+    section_plan_time: str
     section_plan_review_time: str
+    artifact_ids: list[str]
+
+
+@dataclass(frozen=True)
+class ChapterResearchStageResult:
+    chapter_sources: Dict[str, Any]
+    chapter_research_time: str
     artifact_ids: list[str]
 
 
@@ -3474,7 +3482,82 @@ def _run_section_plan_stage(
     return SectionPlanStageResult(
         section_plan=section_plan,
         sections=sections,
+        section_plan_time=section_plan_time,
         section_plan_review_time=section_plan_review_time,
+        artifact_ids=artifact_ids,
+    )
+
+
+def _run_chapter_research_stage(
+    project_id: str,
+    project: ProjectRead,
+    section_plan: Dict[str, Any],
+    agent_name: str,
+    section_plan_review_time: str,
+) -> ChapterResearchStageResult:
+    """Build or reuse the source pool assigned to each planned chapter."""
+    artifact_ids: list[str] = []
+    chapter_sources_artifact = _latest_artifact(project_id, "chapter_sources")
+    if chapter_sources_artifact is not None and _is_fresh(
+        chapter_sources_artifact.updated_at, section_plan_review_time
+    ):
+        chapter_sources = chapter_sources_artifact.content or {}
+        artifact_ids.append(chapter_sources_artifact.id)
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "chapter_research",
+            {
+                "artifact_id": chapter_sources_artifact.id,
+                "chapter_count": len(chapter_sources.get("chapters", [])),
+            },
+        )
+        chapter_research_time = chapter_sources_artifact.updated_at
+    else:
+        run_id = _start_agent_run(
+            project_id,
+            agent_name,
+            "chapter_research",
+            {"chapter_count": len(section_plan.get("outline_tree") or [])},
+        )
+        try:
+            chapter_sources = research_chapters(project, section_plan)
+        except LLMError as exc:
+            _fail_pipeline_stage(project_id, run_id, "chapter_research", exc)
+            raise WorkflowRunFailedError(str(exc)) from exc
+        with get_connection() as conn:
+            artifact_id = _insert_artifact(
+                conn,
+                project_id,
+                "chapter_sources",
+                "Chapter research sources",
+                chapter_sources,
+                utc_now_iso(),
+                agent_name,
+            )
+        artifact_ids.append(artifact_id)
+        chapter_sources_artifact = get_artifact(project_id, artifact_id)
+        chapter_research_time = (
+            chapter_sources_artifact.updated_at
+            if chapter_sources_artifact
+            else utc_now_iso()
+        )
+        _complete_agent_run(
+            run_id,
+            {
+                "artifact_id": artifact_id,
+                "chapter_count": len(chapter_sources.get("chapters", [])),
+                "source_count": sum(
+                    len(chapter.get("sources") or [])
+                    for chapter in chapter_sources.get("chapters", [])
+                ),
+                "error": chapter_sources.get("error"),
+            },
+        )
+
+    return ChapterResearchStageResult(
+        chapter_sources=chapter_sources,
+        chapter_research_time=chapter_research_time,
         artifact_ids=artifact_ids,
     )
 
@@ -3603,63 +3686,20 @@ def _run_document_generation(
         )
         section_plan = section_plan_result.section_plan
         sections = section_plan_result.sections
+        section_plan_time = section_plan_result.section_plan_time
         section_plan_review_time = section_plan_result.section_plan_review_time
         artifact_ids.extend(section_plan_result.artifact_ids)
 
-        chapter_sources_artifact = _latest_artifact(project_id, "chapter_sources")
-        if chapter_sources_artifact is not None and _is_fresh(
-            chapter_sources_artifact.updated_at, section_plan_review_time
-        ):
-            chapter_sources = chapter_sources_artifact.content or {}
-            artifact_ids.append(chapter_sources_artifact.id)
-            _complete_reuse_run(
-                project_id,
-                agent_name,
-                "chapter_research",
-                {
-                    "artifact_id": chapter_sources_artifact.id,
-                    "chapter_count": len(chapter_sources.get("chapters", [])),
-                },
-            )
-            chapter_research_time = chapter_sources_artifact.updated_at
-        else:
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "chapter_research",
-                {"chapter_count": len(section_plan.get("outline_tree") or [])},
-            )
-            chapter_sources = research_chapters(project, section_plan)
-            with get_connection() as conn:
-                artifact_ids.append(
-                    _insert_artifact(
-                        conn,
-                        project_id,
-                        "chapter_sources",
-                        "Chapter research sources",
-                        chapter_sources,
-                        utc_now_iso(),
-                        agent_name,
-                    )
-                )
-            chapter_sources_artifact = get_artifact(project_id, artifact_ids[-1])
-            chapter_research_time = (
-                chapter_sources_artifact.updated_at
-                if chapter_sources_artifact
-                else utc_now_iso()
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "artifact_id": artifact_ids[-1],
-                    "chapter_count": len(chapter_sources.get("chapters", [])),
-                    "source_count": sum(
-                        len(chapter.get("sources") or [])
-                        for chapter in chapter_sources.get("chapters", [])
-                    ),
-                    "error": chapter_sources.get("error"),
-                },
-            )
+        chapter_research_result = _run_chapter_research_stage(
+            project_id,
+            project,
+            section_plan,
+            agent_name,
+            section_plan_review_time,
+        )
+        chapter_sources = chapter_research_result.chapter_sources
+        chapter_research_time = chapter_research_result.chapter_research_time
+        artifact_ids.extend(chapter_research_result.artifact_ids)
 
         section_drafts: list[Dict[str, Any]] = []
         summaries: list[Dict[str, Any]] = []
