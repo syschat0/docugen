@@ -3795,6 +3795,276 @@ def _write_planned_section(
     )
 
 
+def _run_new_section_writing_stage(
+    project_id: str,
+    project: ProjectRead,
+    brief: Dict[str, Any],
+    sections: list[Dict[str, Any]],
+    section_plan: Dict[str, Any],
+    chapter_sources: Dict[str, Any],
+    research: Dict[str, Any],
+    feedback_decisions: list[UserDecisionRead],
+    profile: Dict[str, Any],
+    style_card: Dict[str, Any] | None,
+    agent_name: str,
+) -> SectionWritingStageResult:
+    """Write and persist every planned section with bounded context memory."""
+    section_drafts: list[Dict[str, Any]] = []
+    summaries: list[Dict[str, Any]] = []
+    summary_ids: list[str] = []
+    artifact_ids: list[str] = []
+    previous_summary: Dict[str, Any] | None = None
+    writing_usage: list[Dict[str, Any]] = []
+    run_id = _start_agent_run(
+        project_id,
+        agent_name,
+        "section_writing",
+        {"section_count": len(sections)},
+    )
+    chapter_titles = _chapter_titles_from_plan(section_plan)
+    topup_info: list[Dict[str, Any]] = []
+    chapter_digests: list[Dict[str, Any]] = []
+    digest_usage: list[Dict[str, Any]] = []
+    glossary_counts: dict[str, int] = {}
+    current_chapter_id: str | None = None
+    chapter_summaries: list[Dict[str, Any]] = []
+    sections_done = 0
+    set_stage_progress(project_id, "section_writing", 0, len(sections))
+    try:
+        for section in sections:
+            if is_cancel_requested(project_id):
+                raise WorkflowCancelledError()
+            set_stage_progress(
+                project_id, "section_writing", sections_done, len(sections)
+            )
+            section_chapter = str(section.get("id", "")).split(".")[0]
+            if (
+                current_chapter_id is not None
+                and section_chapter != current_chapter_id
+                and chapter_summaries
+            ):
+                # At chapter boundaries, keep a compact digest instead of the
+                # full prior summary chain in later small-model prompts.
+                digest, usage = _build_chapter_digest(
+                    project,
+                    current_chapter_id,
+                    chapter_titles.get(current_chapter_id, ""),
+                    chapter_summaries,
+                )
+                chapter_digests.append(digest)
+                if usage is not None:
+                    digest_usage.append(
+                        {"chapter_id": current_chapter_id, **usage}
+                    )
+                with get_connection() as conn:
+                    _insert_summary(
+                        conn,
+                        project_id,
+                        current_chapter_id,
+                        "chapter",
+                        digest,
+                        utc_now_iso(),
+                    )
+                chapter_summaries = []
+            current_chapter_id = section_chapter
+
+            project_text = f"{project.title} {project.initial_request}"
+            section_sources = _sources_for_section(
+                section,
+                chapter_sources,
+                research,
+                project_text=project_text,
+            )
+            needs_source_quality_topup = (
+                is_high_stakes_topic(project_text)
+                and best_overlap_score(
+                    section,
+                    [
+                        source
+                        for source in section_sources
+                        if grade_source(source)["tier"]
+                        in {"authoritative", "institutional"}
+                    ],
+                )
+                == 0
+            )
+            if (
+                effective_section_search_enabled(project_id)
+                and effective_search_enabled(project_id)
+                and len(topup_info) < settings.section_search_topup_limit
+                and (
+                    best_overlap_score(section, section_sources) == 0
+                    or needs_source_quality_topup
+                )
+            ):
+                extra_sources, topup_error, topup_query = search_section_sources(
+                    section,
+                    settings.chapter_search_results,
+                    project_text=project_text,
+                )
+                topup_info.append(
+                    {
+                        "section_id": str(section.get("id", "")),
+                        "query": topup_query,
+                        "source_count": len(extra_sources),
+                        "reason": (
+                            "missing_strong_source"
+                            if needs_source_quality_topup
+                            else "no_relevant_source"
+                        ),
+                        "error": topup_error,
+                    }
+                )
+                if extra_sources:
+                    section_sources = extra_sources
+
+            section_feedback = _section_feedback_comments(
+                feedback_decisions, str(section.get("id", ""))
+            )
+            glossary = [
+                term
+                for term, _count in sorted(
+                    glossary_counts.items(), key=lambda item: -item[1]
+                )[:15]
+            ]
+            written_section = _write_planned_section(
+                project,
+                brief,
+                section,
+                previous_summary,
+                section_sources,
+                _section_title_context(section, sections, chapter_titles),
+                section_feedback,
+                chapter_digests,
+                glossary,
+                profile,
+                style_card,
+            )
+            draft_content = written_section.draft_content
+            summary = written_section.summary
+            writing_usage.extend(written_section.usage_entries)
+            with get_connection() as conn:
+                artifact_id = _insert_artifact(
+                    conn,
+                    project_id,
+                    "section_draft",
+                    f"Section {section.get('id', '')}: {section.get('title', '')}",
+                    draft_content,
+                    utc_now_iso(),
+                    agent_name,
+                )
+                summary_ids.append(
+                    _insert_summary(
+                        conn,
+                        project_id,
+                        str(section.get("id", "")),
+                        "section",
+                        summary,
+                        utc_now_iso(),
+                    )
+                )
+            artifact_ids.append(artifact_id)
+            draft_artifact = get_artifact(project_id, artifact_id)
+            section_drafts.append(
+                {
+                    **draft_content,
+                    "artifact_id": artifact_id,
+                    "updated_at": (
+                        draft_artifact.updated_at
+                        if draft_artifact
+                        else utc_now_iso()
+                    ),
+                }
+            )
+            summaries.append(summary)
+            previous_summary = summary
+            chapter_summaries.append(summary)
+            for term in summary.get("terms") or []:
+                term_text = str(term).strip()
+                if term_text:
+                    glossary_counts[term_text] = glossary_counts.get(term_text, 0) + 1
+            sections_done += 1
+            set_stage_progress(
+                project_id, "section_writing", sections_done, len(sections)
+            )
+
+        if current_chapter_id is not None and chapter_summaries:
+            digest, usage = _build_chapter_digest(
+                project,
+                current_chapter_id,
+                chapter_titles.get(current_chapter_id, ""),
+                chapter_summaries,
+            )
+            chapter_digests.append(digest)
+            if usage is not None:
+                digest_usage.append({"chapter_id": current_chapter_id, **usage})
+            with get_connection() as conn:
+                _insert_summary(
+                    conn,
+                    project_id,
+                    current_chapter_id,
+                    "chapter",
+                    digest,
+                    utc_now_iso(),
+                )
+    except LLMError as exc:
+        _fail_pipeline_stage(project_id, run_id, "section_writing", exc)
+        raise WorkflowRunFailedError(str(exc)) from exc
+
+    token_usage: Dict[str, Any] = {}
+    if writing_usage:
+        token_usage["section_calls"] = writing_usage
+    if digest_usage:
+        token_usage["digest_calls"] = digest_usage
+    _complete_agent_run(
+        run_id,
+        {
+            "section_artifact_ids": artifact_ids,
+            "summary_ids": summary_ids,
+            "summary_mode": "combined_with_writing",
+            "chapter_digest_count": len(chapter_digests),
+            "glossary_terms": [
+                term
+                for term, _count in sorted(
+                    glossary_counts.items(), key=lambda item: -item[1]
+                )[:15]
+            ],
+            **({"topup_searches": topup_info} if topup_info else {}),
+        },
+        token_usage=token_usage or None,
+    )
+    clear_stage_progress(project_id)
+
+    summary_run_id = _start_agent_run(
+        project_id,
+        agent_name,
+        "section_summary",
+        {"section_count": len(section_drafts)},
+    )
+    _complete_agent_run(
+        summary_run_id,
+        {
+            "summary_ids": summary_ids,
+            "summary_count": len(summaries),
+            "summary_mode": "combined_with_writing",
+        },
+    )
+    section_work_time = max(
+        [
+            draft["updated_at"]
+            for draft in section_drafts
+            if draft.get("updated_at")
+        ]
+        or [utc_now_iso()]
+    )
+    return SectionWritingStageResult(
+        section_drafts=section_drafts,
+        summaries=summaries,
+        section_work_time=section_work_time,
+        artifact_ids=artifact_ids,
+    )
+
+
 def _run_feedback_revision_stage(
     project_id: str,
     project: ProjectRead,
@@ -4356,244 +4626,23 @@ def _run_document_generation(
             section_work_time = writing_result.section_work_time
             artifact_ids.extend(writing_result.artifact_ids)
         else:
-            section_drafts: list[Dict[str, Any]] = []
-            summaries: list[Dict[str, Any]] = []
-            summary_ids: list[str] = []
-            previous_summary: Dict[str, Any] | None = None
-            writing_usage: list[Dict[str, Any]] = []
-            run_id = _start_agent_run(
+            writing_result = _run_new_section_writing_stage(
                 project_id,
+                project,
+                brief,
+                sections,
+                section_plan,
+                chapter_sources,
+                research,
+                feedback_decisions,
+                profile,
+                style_card,
                 agent_name,
-                "section_writing",
-                {"section_count": len(sections)},
             )
-            chapter_titles = _chapter_titles_from_plan(section_plan)
-            topup_info: list[Dict[str, Any]] = []
-            chapter_digests: list[Dict[str, Any]] = []
-            digest_usage: list[Dict[str, Any]] = []
-            glossary_counts: dict[str, int] = {}
-            current_chapter_id: str | None = None
-            chapter_summaries: list[Dict[str, Any]] = []
-            sections_done = 0
-            set_stage_progress(project_id, "section_writing", 0, len(sections))
-            for section in sections:
-                # Section writing is the longest phase; check cancel and publish
-                # "n of N" sub-progress on every section, not just at boundaries.
-                if is_cancel_requested(project_id):
-                    raise WorkflowCancelledError()
-                set_stage_progress(project_id, "section_writing", sections_done, len(sections))
-                section_chapter = str(section.get("id", "")).split(".")[0]
-                if (
-                    current_chapter_id is not None
-                    and section_chapter != current_chapter_id
-                    and chapter_summaries
-                ):
-                    # Chapter boundary: compress the finished chapter into a
-                    # digest so later sections remember it without carrying
-                    # the full summary chain.
-                    digest, usage = _build_chapter_digest(
-                        project,
-                        current_chapter_id,
-                        chapter_titles.get(current_chapter_id, ""),
-                        chapter_summaries,
-                    )
-                    chapter_digests.append(digest)
-                    if usage is not None:
-                        digest_usage.append({"chapter_id": current_chapter_id, **usage})
-                    with get_connection() as conn:
-                        _insert_summary(
-                            conn,
-                            project_id,
-                            current_chapter_id,
-                            "chapter",
-                            digest,
-                            utc_now_iso(),
-                        )
-                    chapter_summaries = []
-                current_chapter_id = section_chapter
-                project_text = f"{project.title} {project.initial_request}"
-                section_sources = _sources_for_section(
-                    section, chapter_sources, research, project_text=project_text
-                )
-                needs_source_quality_topup = (
-                    is_high_stakes_topic(project_text)
-                    and best_overlap_score(
-                        section,
-                        [
-                            source
-                            for source in section_sources
-                            if grade_source(source)["tier"]
-                            in {"authoritative", "institutional"}
-                        ],
-                    )
-                    == 0
-                )
-                # Top-up search: when nothing in the research pool matches this
-                # section, or a high-stakes section lacks strong sources, one
-                # extra targeted search beats writing weakly supported prose.
-                if (
-                    effective_section_search_enabled(project_id)
-                    and effective_search_enabled(project_id)
-                    and len(topup_info) < settings.section_search_topup_limit
-                    and (
-                        best_overlap_score(section, section_sources) == 0
-                        or needs_source_quality_topup
-                    )
-                ):
-                    extra_sources, topup_error, topup_query = search_section_sources(
-                        section,
-                        settings.chapter_search_results,
-                        project_text=project_text,
-                    )
-                    topup_info.append(
-                        {
-                            "section_id": str(section.get("id", "")),
-                            "query": topup_query,
-                            "source_count": len(extra_sources),
-                            "reason": (
-                                "missing_strong_source"
-                                if needs_source_quality_topup
-                                else "no_relevant_source"
-                            ),
-                            "error": topup_error,
-                        }
-                    )
-                    if extra_sources:
-                        section_sources = extra_sources
-                section_feedback = _section_feedback_comments(
-                    feedback_decisions, str(section.get("id", ""))
-                )
-                glossary = [
-                    term
-                    for term, _count in sorted(
-                        glossary_counts.items(), key=lambda item: -item[1]
-                    )[:15]
-                ]
-                written_section = _write_planned_section(
-                    project,
-                    brief,
-                    section,
-                    previous_summary,
-                    section_sources,
-                    _section_title_context(section, sections, chapter_titles),
-                    section_feedback,
-                    chapter_digests,
-                    glossary,
-                    profile,
-                    style_card,
-                )
-                draft_content = written_section.draft_content
-                summary = written_section.summary
-                writing_usage.extend(written_section.usage_entries)
-                markdown = str(draft_content.get("markdown") or "")
-                evidence = draft_content.get("evidence") or []
-                evidence_validation = draft_content.get("evidence_validation") or {}
-                evidence_repair = draft_content.get("evidence_repair") or {}
-                with get_connection() as conn:
-                    artifact_ids.append(
-                        _insert_artifact(
-                            conn,
-                            project_id,
-                            "section_draft",
-                            f"Section {section.get('id', '')}: {section.get('title', '')}",
-                            draft_content,
-                            utc_now_iso(),
-                            agent_name,
-                        )
-                    )
-                    summary_ids.append(
-                        _insert_summary(
-                            conn,
-                            project_id,
-                            str(section.get("id", "")),
-                            "section",
-                            summary,
-                            utc_now_iso(),
-                        )
-                    )
-                draft_artifact = get_artifact(project_id, artifact_ids[-1])
-                section_drafts.append(
-                    {
-                        "section": section,
-                        "markdown": markdown,
-                        "sources": section_sources,
-                        "evidence": evidence,
-                        "evidence_validation": evidence_validation,
-                        "evidence_repair": evidence_repair,
-                        "artifact_id": artifact_ids[-1],
-                        "updated_at": draft_artifact.updated_at if draft_artifact else utc_now_iso(),
-                    }
-                )
-                summaries.append(summary)
-                previous_summary = summary
-                chapter_summaries.append(summary)
-                for term in summary.get("terms") or []:
-                    term_text = str(term).strip()
-                    if term_text:
-                        glossary_counts[term_text] = glossary_counts.get(term_text, 0) + 1
-                sections_done += 1
-                set_stage_progress(project_id, "section_writing", sections_done, len(sections))
-            if current_chapter_id is not None and chapter_summaries:
-                digest, usage = _build_chapter_digest(
-                    project,
-                    current_chapter_id,
-                    chapter_titles.get(current_chapter_id, ""),
-                    chapter_summaries,
-                )
-                chapter_digests.append(digest)
-                if usage is not None:
-                    digest_usage.append({"chapter_id": current_chapter_id, **usage})
-                with get_connection() as conn:
-                    _insert_summary(
-                        conn,
-                        project_id,
-                        current_chapter_id,
-                        "chapter",
-                        digest,
-                        utc_now_iso(),
-                    )
-            token_usage: Dict[str, Any] = {}
-            if writing_usage:
-                token_usage["section_calls"] = writing_usage
-            if digest_usage:
-                token_usage["digest_calls"] = digest_usage
-            _complete_agent_run(
-                run_id,
-                {
-                    "section_artifact_ids": artifact_ids[-len(section_drafts) :],
-                    "summary_ids": summary_ids,
-                    "summary_mode": "combined_with_writing",
-                    "chapter_digest_count": len(chapter_digests),
-                    "glossary_terms": [
-                        term
-                        for term, _count in sorted(
-                            glossary_counts.items(), key=lambda item: -item[1]
-                        )[:15]
-                    ],
-                    **({"topup_searches": topup_info} if topup_info else {}),
-                },
-                token_usage=token_usage or None,
-            )
-            clear_stage_progress(project_id)
-
-            run_id = _start_agent_run(
-                project_id,
-                agent_name,
-                "section_summary",
-                {"section_count": len(section_drafts)},
-            )
-            _complete_agent_run(
-                run_id,
-                {
-                    "summary_ids": summary_ids,
-                    "summary_count": len(summaries),
-                    "summary_mode": "combined_with_writing",
-                },
-            )
-            section_work_time = max(
-                [draft["updated_at"] for draft in section_drafts if draft.get("updated_at")]
-                or [utc_now_iso()]
-            )
+            section_drafts = writing_result.section_drafts
+            summaries = writing_result.summaries
+            section_work_time = writing_result.section_work_time
+            artifact_ids.extend(writing_result.artifact_ids)
 
         # Fresh writes already receive feedback in their prompt; this stage only
         # applies comments that are newer than a reused draft.

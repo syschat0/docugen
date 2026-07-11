@@ -49,7 +49,7 @@
 - [x] 3-0. 스테이지 순서·레이블·무효화·요약 초기화 규칙을
       `PipelineStageSpec` 레지스트리로 통합. `feedback_revision` 강제 실행도
       해당 단계 이후 실행 로그를 정확히 초기화
-- [ ] 3-1. `run_document_generation`(~1,200줄 단일 함수)을 스테이지 레지스트리 구조로 분해
+- [x] 3-1. `run_document_generation`(~1,200줄 단일 함수)을 스테이지 레지스트리 구조로 분해
       - [x] 3-1a. `final_merge`의 인용 조립·이음새·품질 요약을
         부작용 없는 `_build_final_draft_content`로 추출
       - [x] 3-1b. 대기 질문 처리와 문서 유형·프로파일·사용자 결정 준비 로직 추출
@@ -65,7 +65,7 @@
       - [x] 3-1l. 초안 이후 섹션 피드백 적용을 `_run_feedback_revision_stage`로 추출
       - [x] 3-1m. 연속성·유형별 루브릭 검토를 `_run_document_review_stage`로 추출
       - [x] 3-1n. 검토 기반 타깃 수정·문장 품질 제한 복구를 `_run_targeted_revision_stage`로 추출
-      - [ ] 3-1o. 신규 섹션 순회/저장 실행 블록 추출
+      - [x] 3-1o. 신규 섹션 순회·저장·장 요약·출처 보강을 `_run_new_section_writing_stage`로 추출
 - [ ] 3-2. 유형 프로파일에 따라 리서치·인용 스테이지 조건부 실행
       (M1의 citation_style과 연결: 인용 자체의 on/off는 유형이 결정)
 
