@@ -7,8 +7,11 @@ builds (Chrome/Edge channels) plus stealth pass bot checks that block plain
 HTTP clients and bundled Chromium. Daum gives the best Korean results and
 Bing is a reliable fallback; Google is supported but blocks aggressively and
 its result-page selectors are brittle, so it is best used as a first choice
-with Bing/Daum behind it in the priority list. Source pages are also fetched
-with the browser so JS-rendered sites can be summarized.
+with Bing/Daum behind it in the priority list. "google_pse" is an API-type
+engine (Custom Search JSON API, needs GOOGLE_PSE_API_KEY/GOOGLE_PSE_CX): it is
+queried over HTTPS with no browser page, so it never sees a bot challenge.
+Source pages are also fetched with the browser so JS-rendered sites can be
+summarized.
 """
 
 import base64
@@ -169,6 +172,17 @@ def decode_google_url(href: str) -> str:
     return href
 
 
+def _search_google_pse_api(query: str) -> list[dict[str, str]]:
+    from app.services.google_pse import GooglePSEQuotaError, search_google_pse
+
+    try:
+        return search_google_pse(query)
+    except GooglePSEQuotaError as exc:
+        # Quota/permission failures won't heal within a run; blocking the
+        # engine (like a bot challenge) stops pointless retries.
+        raise SearchChallengeError(str(exc)) from exc
+
+
 _ENGINES.update(
     {
         "daum": {
@@ -190,6 +204,11 @@ _ENGINES.update(
             "result_selector": "div.tF2Cxc, div.g",
             "extract_js": _EXTRACT_GOOGLE_JS,
             "decode_url": decode_google_url,
+        },
+        # API engine: queried over HTTPS, no browser page or selectors.
+        "google_pse": {
+            "api_search": _search_google_pse_api,
+            "decode_url": None,
         },
     }
 )
@@ -318,7 +337,11 @@ def _search_query_with_fallback(
         if name in blocked:
             continue
         try:
-            items = _run_search_query(page, config, query, timeout_ms)
+            api_search = config.get("api_search")
+            if api_search is not None:
+                items = api_search(query)
+            else:
+                items = _run_search_query(page, config, query, timeout_ms)
         except SearchChallengeError:
             blocked.add(name)  # engine-level block for the rest of the run
             last_error = f"{name}: rate-limit challenge"
@@ -384,6 +407,7 @@ def search_with_browser(
                         "title": item.get("title", ""),
                         "url": url,
                         "snippet": item.get("snippet", ""),
+                        "engine": name,
                     }
                     if taken < per_query_cap and len(results) < max_results:
                         results.append(normalized)
@@ -438,6 +462,7 @@ def search_grouped(
                             "query": query,
                             "results": [],
                             "error": error or "all engines failed",
+                            "engine": None,
                         }
                     )
                     continue
@@ -454,6 +479,7 @@ def search_grouped(
                             "title": item.get("title", ""),
                             "url": url,
                             "snippet": item.get("snippet", ""),
+                            "engine": name,
                         }
                     )
                     if len(results) >= per_query:
@@ -463,6 +489,7 @@ def search_grouped(
                         "query": query,
                         "results": results,
                         "error": None if results else f"no results extracted ({name})",
+                        "engine": name,
                     }
                 )
         finally:

@@ -31,6 +31,10 @@ class TestDecodeBingUrl:
 class TestEngineRegistry:
     def test_known_engines_have_required_keys(self):
         for name, config in _ENGINES.items():
+            if "api_search" in config:
+                # API engines have no browser page/selectors.
+                assert callable(config["api_search"]), name
+                continue
             assert "{query}" in config["url_template"], name
             assert config["result_selector"], name
             assert config["extract_js"], name
@@ -129,6 +133,46 @@ class TestSearchQueryFallback:
         assert name == "daum"
         assert items == []
         assert tried == [_ENGINES["daum"]]
+
+    def test_api_engine_is_called_without_browser(self, monkeypatch):
+        called = []
+
+        def fake_api(query):
+            called.append(query)
+            return [{"title": "T", "url": "https://api", "snippet": "s"}]
+
+        def boom_run(*args, **kwargs):
+            raise AssertionError("_run_search_query should not be called")
+
+        monkeypatch.setattr(browser_search, "_run_search_query", boom_run)
+        priority = [("google_pse", {"api_search": fake_api, "decode_url": None})]
+        name, config, items, error = browser_search._search_query_with_fallback(
+            None, priority, set(), "q", 1000
+        )
+        assert name == "google_pse"
+        assert called == ["q"]
+        assert items[0]["url"] == "https://api"
+        assert error is None
+
+    def test_api_engine_challenge_blocks_and_falls_back(self, monkeypatch):
+        def fake_api(query):
+            raise browser_search.SearchChallengeError("quota")
+
+        def fake_run(page, config, query, timeout_ms):
+            return [{"title": "T", "url": "https://x", "snippet": "s"}]
+
+        monkeypatch.setattr(browser_search, "_run_search_query", fake_run)
+        priority = [
+            ("google_pse", {"api_search": fake_api, "decode_url": None}),
+            ("bing", _ENGINES["bing"]),
+        ]
+        blocked: set[str] = set()
+        name, config, items, error = browser_search._search_query_with_fallback(
+            None, priority, blocked, "q", 1000
+        )
+        assert name == "bing"
+        assert items[0]["url"] == "https://x"
+        assert "google_pse" in blocked
 
 
 class TestApplyStealth:

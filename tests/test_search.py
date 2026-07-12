@@ -159,6 +159,7 @@ class TestSearchOnce:
             "https://example.com/docker",
             "https://example.org/other",
         ]
+        assert all(r["engine"] == "duckduckgo" for r in results)
 
     def test_sends_short_encoded_query(self, monkeypatch):
         seen = {}
@@ -171,6 +172,51 @@ class TestSearchOnce:
         _search_once("docker 가이드")
         query = parse_qs(urlparse(seen["url"]).query)["q"][0]
         assert query == "docker 가이드"
+
+    def test_pse_results_returned_without_duckduckgo(self, monkeypatch):
+        monkeypatch.setattr(search, "google_pse_configured", lambda: True)
+        monkeypatch.setattr(
+            search,
+            "current_search_options",
+            lambda: SimpleNamespace(engines=("google_pse", "daum")),
+        )
+        monkeypatch.setattr(
+            search,
+            "search_google_pse",
+            lambda query: [{"title": "PSE", "url": "https://pse.example/1", "snippet": "s"}],
+        )
+
+        def boom_urlopen(*a, **k):
+            raise AssertionError("DuckDuckGo should not be called")
+
+        monkeypatch.setattr(search.urllib.request, "urlopen", boom_urlopen)
+        results, error = _search_once("q")
+        assert error is None
+        assert results[0]["url"] == "https://pse.example/1"
+        assert results[0]["engine"] == "google_pse"
+
+    def test_pse_error_falls_through_to_duckduckgo(self, monkeypatch):
+        from app.services.google_pse import GooglePSEError
+
+        monkeypatch.setattr(search, "google_pse_configured", lambda: True)
+        monkeypatch.setattr(
+            search,
+            "current_search_options",
+            lambda: SimpleNamespace(engines=("google_pse",)),
+        )
+
+        def boom_pse(query):
+            raise GooglePSEError("quota")
+
+        monkeypatch.setattr(search, "search_google_pse", boom_pse)
+        monkeypatch.setattr(
+            search.urllib.request, "urlopen", lambda *a, **k: FakeResponse(CHALLENGE_HTML)
+        )
+        results, error = _search_once("q")
+        assert results == []
+        assert error is not None
+        assert "google_pse: quota" in error
+        assert "bot-protection" in error
 
 
 def fake_settings(**overrides) -> SimpleNamespace:
@@ -207,6 +253,7 @@ class TestSearchWeb:
         assert result["backend"] == "http"
         urls = [r["url"] for r in result["results"]]
         assert urls == sorted(set(urls), key=urls.index)
+        assert result["engines"] == ["duckduckgo"]
         assert result["error"] is None
 
     def test_all_queries_challenged_sets_error(self, monkeypatch):
@@ -337,6 +384,7 @@ class TestResearchChapters:
         for chapter in result["chapters"]:
             assert len(chapter["sources"]) == 2
             assert chapter["query"]
+            assert chapter["engine"] == "duckduckgo"
 
     def test_chapter_query_is_short(self):
         project = make_project(title="T " * 100)
@@ -350,11 +398,15 @@ class TestSearchBackends:
         monkeypatch.setattr(
             search,
             "_search_browser",
-            lambda queries: ([{"title": "T", "url": "https://a.com", "snippet": "s"}], []),
+            lambda queries: (
+                [{"title": "T", "url": "https://a.com", "snippet": "s", "engine": "bing"}],
+                [],
+            ),
         )
         result = search_web(make_project(), [])
         assert result["backend"] == "browser"
         assert result["results"][0]["url"] == "https://a.com"
+        assert result["engines"] == ["bing"]
         assert result["error"] is None
 
     def test_auto_falls_back_to_http_when_browser_fails(self, monkeypatch):

@@ -116,6 +116,7 @@ const translations = {
     projectCreated: "Project created.",
     projectDeleted: "Project deleted.",
     projects: "Projects",
+    engine: "Search engine",
     query: "Query",
     queries: "Queries",
     querySource: "Query source",
@@ -486,6 +487,7 @@ const translations = {
     projectCreated: "프로젝트를 생성했습니다.",
     projectDeleted: "프로젝트를 삭제했습니다.",
     projects: "프로젝트",
+    engine: "검색 엔진",
     query: "검색어",
     queries: "검색어 목록",
     querySource: "검색어 출처",
@@ -2069,6 +2071,18 @@ function renderUsedSources(sources) {
     .join("")}</ul>`;
 }
 
+const ENGINE_LABELS = {
+  daum: "Daum",
+  bing: "Bing",
+  google: "Google",
+  google_pse: "Google PSE",
+  duckduckgo: "DuckDuckGo",
+};
+
+function engineLabel(name) {
+  return ENGINE_LABELS[name] || name || "";
+}
+
 function renderStepDetails(step) {
   const details = step.details || {};
   if (step.error) {
@@ -2090,6 +2104,7 @@ function renderStepDetails(step) {
       return [
         renderKeyValueList([
           [t("querySource"), details.query_source],
+          [t("engine"), (details.engines || []).map(engineLabel).join(", ")],
           [t("sources"), details.source_count],
           [t("searchError"), details.error],
         ]),
@@ -2162,7 +2177,7 @@ function renderStepDetails(step) {
           .map(
             (chapter) => `<article>
               <strong>${escapeHtml([chapter.id, chapter.title].filter(Boolean).join(". "))}</strong>
-              <p class="item-meta">${escapeHtml(t("query"))}: ${escapeHtml(chapter.query || "-")}</p>
+              <p class="item-meta">${escapeHtml(t("query"))}: ${escapeHtml(chapter.query || "-")}${chapter.engine ? ` · ${escapeHtml(t("engine"))}: ${escapeHtml(engineLabel(chapter.engine))}` : ""}</p>
               ${chapter.error ? `<p class="item-meta">${escapeHtml(t("searchError"))}: ${escapeHtml(chapter.error)}</p>` : ""}
               ${renderSourceLinks(chapter.sources)}
             </article>`,
@@ -2180,7 +2195,7 @@ function renderStepDetails(step) {
           ? `<p class="item-meta">${escapeHtml(t("topupSearches"))}</p><ul>${details.topup_searches
               .map(
                 (s) =>
-                  `<li>${escapeHtml(s.query || "-")} · ${escapeHtml(t("sources"))}: ${escapeHtml(s.source_count ?? 0)}${s.error ? ` · ${escapeHtml(t("searchError"))}: ${escapeHtml(s.error)}` : ""}</li>`,
+                  `<li>${escapeHtml(s.query || "-")} · ${escapeHtml(t("sources"))}: ${escapeHtml(s.source_count ?? 0)}${s.engines?.length ? ` · ${escapeHtml(t("engine"))}: ${escapeHtml(s.engines.map(engineLabel).join(", "))}` : ""}${s.error ? ` · ${escapeHtml(t("searchError"))}: ${escapeHtml(s.error)}` : ""}</li>`,
               )
               .join("")}</ul>`
           : "",

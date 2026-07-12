@@ -49,7 +49,7 @@ class ProjectSettingsUpdate(BaseModel):
     target_length: int | None = Field(default=None, ge=100, le=200000)
     # Browser-search knobs (also settable via env; see app/core/config.py).
     # search_engines is a priority list tried in order (fallback on block/error).
-    search_engines: list[Literal["daum", "bing", "google"]] | None = None
+    search_engines: list[Literal["daum", "bing", "google", "google_pse"]] | None = None
     search_headless: bool | None = None
     search_stealth: bool | None = None
     search_locale: Literal["ko-KR", "en-US"] | None = None

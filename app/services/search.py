@@ -8,6 +8,7 @@ import urllib.request
 from app.core.config import settings
 from app.schemas.projects import ProjectRead
 from app.schemas.questions import UserDecisionRead
+from app.services.google_pse import GooglePSEError, google_pse_configured, search_google_pse
 from app.services.page_meta import extract_page_meta
 from app.services.quality import (
     authoritative_search_queries,
@@ -15,6 +16,7 @@ from app.services.quality import (
     is_high_stakes_topic,
     summarize_source_quality,
 )
+from app.services.search_options import current_search_options
 
 # Citation metadata fields copied from fetched pages onto source dicts.
 _PAGE_META_FIELDS = ("author", "published_year", "site_name")
@@ -156,6 +158,15 @@ def _is_challenge_page(html: str) -> bool:
 
 
 def _search_once(query: str) -> tuple[list[dict[str, str]], str | None]:
+    # Google PSE is a plain HTTPS API, so the http path can use it too when
+    # it is configured and selected; DuckDuckGo stays the error fallback.
+    pse_error: str | None = None
+    if google_pse_configured() and "google_pse" in current_search_options().engines:
+        try:
+            return [{**r, "engine": "google_pse"} for r in search_google_pse(query)], None
+        except GooglePSEError as exc:
+            pse_error = f"google_pse: {exc}"
+
     url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
     request = urllib.request.Request(
         url,
@@ -169,13 +180,18 @@ def _search_once(query: str) -> tuple[list[dict[str, str]], str | None]:
         ) as response:
             html = response.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, TimeoutError) as exc:
-        return [], str(exc)
+        return [], "; ".join(filter(None, [pse_error, str(exc)]))
 
     parser = _DuckDuckGoHTMLParser()
     parser.feed(html)
     if not parser.results and _is_challenge_page(html):
-        return [], f"Search engine returned a bot-protection page for query: {query}"
-    return parser.results, None
+        return [], "; ".join(
+            filter(
+                None,
+                [pse_error, f"Search engine returned a bot-protection page for query: {query}"],
+            )
+        )
+    return [{**r, "engine": "duckduckgo"} for r in parser.results], None
 
 
 def _search_http(queries: list[str]) -> tuple[list[dict[str, str]], list[str]]:
@@ -302,6 +318,12 @@ def search_web(project: ProjectRead, decisions: list[UserDecisionRead]) -> dict[
     else:
         results = _rank_and_dedupe_results(results, settings.search_max_results)
 
+    engines: list[str] = []
+    for result in results:
+        engine = result.get("engine")
+        if engine and engine not in engines:
+            engines.append(engine)
+
     return {
         "enabled": True,
         "query": " | ".join(queries),
@@ -309,6 +331,7 @@ def search_web(project: ProjectRead, decisions: list[UserDecisionRead]) -> dict[
         "query_source": query_source,
         "backend": used_backend,
         "results": results,
+        "engines": engines,
         "quality_topup": quality_topup,
         "error": "; ".join(errors) if errors and not results else None,
     }
@@ -396,7 +419,15 @@ def research_chapters(
         grouped = []
         for query in queries:
             results, error = _search_once(query)
-            grouped.append({"query": query, "results": results[:per_query], "error": error})
+            results = results[:per_query]
+            grouped.append(
+                {
+                    "query": query,
+                    "results": results,
+                    "error": error,
+                    "engine": results[0].get("engine") if results else None,
+                }
+            )
 
     pages_by_url: dict[str, dict[str, str]] = {}
     if browser_ok:
@@ -416,6 +447,7 @@ def research_chapters(
 
     for entry, group in zip(entries, grouped):
         entry["error"] = group.get("error")
+        entry["engine"] = group.get("engine")
         for result in (group.get("results") or [])[:per_query]:
             url = result.get("url", "")
             page = pages_by_url.get(url, {})
@@ -539,6 +571,7 @@ def search_section_sources(
             "query": result.get("_quality_query") or query,
             "quality_topup": bool(result.get("_quality_query")),
             "trust_tier": grade_source(result)["tier"],
+            "engine": result.get("engine", ""),
         }
         for result in results
         if result.get("url")

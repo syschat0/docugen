@@ -130,6 +130,14 @@ class TestEffectiveSearchOptions:
         assert opts.query_language == "native"
 
 
+class TestProjectSettingsSchema:
+    def test_google_pse_engine_round_trips(self):
+        from app.schemas.projects import ProjectSettingsUpdate
+
+        payload = ProjectSettingsUpdate(search_engines=["google_pse", "daum"])
+        assert payload.search_engines == ["google_pse", "daum"]
+
+
 class TestDecisionCutoff:
     def test_inputs_changed_at_extends_cutoff(self, monkeypatch):
         monkeypatch.setattr(

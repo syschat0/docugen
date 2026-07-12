@@ -38,9 +38,9 @@ class Settings:
     search_enabled: bool = _bool_env("SEARCH_ENABLED", "true")
     # "auto": headless browser first, HTTP fallback. "browser" / "http": that backend only.
     search_backend: str = os.getenv("SEARCH_BACKEND", "auto").strip().lower()
-    # Browser-backend engine priority, comma-separated (e.g. "google,bing,daum").
-    # Engines are tried in order; on a bot challenge or error the next one is
-    # used. See _ENGINES in services/browser_search.py.
+    # Engine priority, comma-separated (e.g. "google_pse,bing,daum"). Engines
+    # are tried in order; on a bot challenge or error the next one is used. See
+    # _ENGINES in services/browser_search.py.
     search_engine: str = os.getenv("SEARCH_ENGINE", "daum").strip().lower()
     search_max_results: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
     chapter_search_results: int = int(os.getenv("CHAPTER_SEARCH_RESULTS", "2"))
@@ -71,6 +71,11 @@ class Settings:
     search_query_language: str = os.getenv(
         "SEARCH_QUERY_LANGUAGE", "native"
     ).strip().lower()
+    # Google Programmable Search Engine (Custom Search JSON API) credentials for
+    # the "google_pse" engine: an API key with the Custom Search API enabled and
+    # the engine ID (cx) from programmablesearchengine.google.com.
+    google_pse_api_key: str = os.getenv("GOOGLE_PSE_API_KEY", "").strip()
+    google_pse_cx: str = os.getenv("GOOGLE_PSE_CX", "").strip()
 
 
 settings = Settings()

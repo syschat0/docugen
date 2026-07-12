@@ -3977,6 +3977,7 @@ def _run_new_section_writing_stage(
                     {
                         "section_id": str(section.get("id", "")),
                         "query": topup_query,
+                        "engines": _unique_engines(extra_sources),
                         "source_count": len(extra_sources),
                         "reason": (
                             "missing_strong_source"
@@ -4933,6 +4934,16 @@ def _short_text(value: Any, limit: int = 500) -> str:
     return text[:limit].rstrip() + "..."
 
 
+def _unique_engines(sources: list[dict[str, Any]]) -> list[str]:
+    """Ordered-unique, truthy search engine names across the given sources."""
+    engines: list[str] = []
+    for source in sources:
+        engine = source.get("engine") if isinstance(source, dict) else None
+        if engine and engine not in engines:
+            engines.append(engine)
+    return engines
+
+
 def _run_output(row: dict[str, Any] | None) -> Dict[str, Any]:
     if row is None or not row.get("output_json"):
         return {}
@@ -4960,6 +4971,7 @@ def _workflow_step_details(
                 "query": content.get("query"),
                 "queries": content.get("queries"),
                 "query_source": content.get("query_source"),
+                "engines": content.get("engines") or [],
                 "source_count": len(results),
                 "sources": [
                     {
@@ -5036,6 +5048,7 @@ def _workflow_step_details(
                 "id": chapter.get("chapter_id"),
                 "title": chapter.get("title"),
                 "query": chapter.get("query"),
+                "engine": chapter.get("engine"),
                 "source_count": len(chapter.get("sources") or []),
                 "error": chapter.get("error"),
                 "sources": [
