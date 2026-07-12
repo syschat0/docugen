@@ -500,9 +500,10 @@ def search_grouped(
 
 def _clean_page_text(raw: str) -> str:
     # Drop short lines (navigation, buttons, menus) so summaries carry the
-    # article body instead of site chrome.
+    # article body instead of site chrome. Keep newlines so paragraph
+    # boundaries survive for downstream passage splitting.
     lines = (" ".join(line.split()) for line in raw.splitlines())
-    return " ".join(line for line in lines if len(line) >= 25)
+    return "\n".join(line for line in lines if len(line) >= 25)
 
 
 def fetch_page_texts(urls: list[str]) -> list[dict[str, str]]:

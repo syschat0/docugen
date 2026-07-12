@@ -63,28 +63,36 @@ class _DuckDuckGoHTMLParser(HTMLParser):
             self._current["snippet"] = (self._current["snippet"] + " " + text).strip()
 
 
+# Tags whose text is site chrome rather than article body. A depth counter
+# (not a bool) keeps nested occurrences balanced.
+_SKIP_TAGS = {
+    "script", "style", "noscript",
+    "nav", "footer", "aside", "header", "form", "button",
+}
+
+
 class _TextExtractParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.title = ""
         self.text_parts: list[str] = []
-        self._skip = False
+        self._skip_depth = 0
         self._in_title = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in {"script", "style", "noscript"}:
-            self._skip = True
+        if tag in _SKIP_TAGS:
+            self._skip_depth += 1
         elif tag == "title":
             self._in_title = True
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in {"script", "style", "noscript"}:
-            self._skip = False
+        if tag in _SKIP_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
         elif tag == "title":
             self._in_title = False
 
     def handle_data(self, data: str) -> None:
-        if self._skip:
+        if self._skip_depth:
             return
         text = " ".join(unescape(data).split())
         if not text:
@@ -461,6 +469,8 @@ def research_chapters(
                 "snippet": result.get("snippet", ""),
                 "summary": summary,
             }
+            if text.strip():
+                source["full_text"] = text[: settings.source_full_text_chars]
             source.update(
                 {field: page[field] for field in _PAGE_META_FIELDS if page.get(field)}
             )
@@ -593,6 +603,8 @@ def _summaries_via_browser(results: list[dict[str, Any]]) -> list[dict[str, str]
             "summary": text[:1200] or result.get("snippet", ""),
             "error": page.get("error", ""),
         }
+        if text.strip():
+            summary["full_text"] = text[: settings.source_full_text_chars]
         summary.update(
             {field: page[field] for field in _PAGE_META_FIELDS if page.get(field)}
         )
@@ -635,9 +647,11 @@ def summarize_search_sources(research: dict[str, Any]) -> dict[str, Any]:
                     html = response.read(250000).decode("utf-8", errors="replace")
                     parser = _TextExtractParser()
                     parser.feed(html)
-                    text = " ".join(parser.text_parts)
+                    text = "\n".join(parser.text_parts)
                     summary["title"] = parser.title or summary["title"]
                     summary["summary"] = text[:1200] or summary["summary"]
+                    if text.strip():
+                        summary["full_text"] = text[: settings.source_full_text_chars]
                     summary.update(extract_page_meta(html))
         except Exception as exc:
             summary["error"] = str(exc)

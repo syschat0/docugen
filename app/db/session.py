@@ -162,6 +162,13 @@ def init_db() -> None:
               completed_at TEXT,
               FOREIGN KEY (project_id) REFERENCES projects(id)
             );
+
+            CREATE TABLE IF NOT EXISTS source_eval_cache (
+              cache_key TEXT PRIMARY KEY,
+              url TEXT NOT NULL,
+              eval_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
             """
         )
         _ensure_column(conn, "projects", "document_type", "document_type TEXT")

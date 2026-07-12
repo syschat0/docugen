@@ -44,6 +44,20 @@ class Settings:
     search_engine: str = os.getenv("SEARCH_ENGINE", "daum").strip().lower()
     search_max_results: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
     chapter_search_results: int = int(os.getenv("CHAPTER_SEARCH_RESULTS", "2"))
+    # Cleaned page body kept on each source artifact so the passage selector can
+    # pick relevant sentences instead of an arbitrary leading block.
+    source_full_text_chars: int = int(os.getenv("SOURCE_FULL_TEXT_CHARS", "5000"))
+    # LLM "judge" over search sources: one call per eligible page gates (usable),
+    # compresses (summary/key_facts), and scores (info_density). Automatically
+    # disabled when the LLM itself is off.
+    source_eval_enabled: bool = _bool_env("SOURCE_EVAL_ENABLED", "true")
+    # Maximum real LLM evaluation calls per pipeline stage invocation. Cache hits
+    # do not count against this budget.
+    source_eval_limit: int = int(os.getenv("SOURCE_EVAL_LIMIT", "8"))
+    # Total character budget for the source block in a section-writing prompt.
+    source_context_budget_chars: int = int(
+        os.getenv("SOURCE_CONTEXT_BUDGET_CHARS", "3000")
+    )
     # Per-section top-up search: when a section's selected sources have no
     # keyword overlap with the section, run one extra web search for it.
     section_search_enabled: bool = _bool_env("SECTION_SEARCH_ENABLED", "false")

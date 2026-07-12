@@ -13,6 +13,8 @@ import re
 from typing import Any, Dict
 from urllib.parse import urlparse
 
+from app.services import evidence
+
 
 _AUTHORITATIVE_HOSTS = {
     "bok.or.kr",
@@ -198,34 +200,27 @@ def relevant_evidence_passages(
 ) -> list[Dict[str, str]]:
     """Return short source passages ranked for one section.
 
-    Search backends already cap page text. This second pass prevents the writer
-    from receiving an arbitrary leading block when a more relevant sentence is
-    available later in the captured text.
+    The preserved page body (``full_text``) is split into compact passages and
+    ranked by bigram overlap with the section, so the writer receives the most
+    relevant sentences instead of an arbitrary leading block. Falls back to the
+    truncated ``summary`` or ``snippet`` when no full body was captured.
     """
-    raw = str(source.get("summary") or source.get("snippet") or "").strip()
+    raw = str(
+        source.get("full_text") or source.get("summary") or source.get("snippet") or ""
+    ).strip()
     if not raw:
         return []
-    pieces = [
-        " ".join(piece.split())
-        for piece in re.split(r"(?<=[.!?。！？])\s+|\n+", raw)
-        if len(" ".join(piece.split())) >= 25
-    ]
-    if not pieces:
-        pieces = [raw[index : index + 280].strip() for index in range(0, len(raw), 280)]
-    section_words = _words(
-        " ".join(
-            [str(section.get("title") or ""), str(section.get("purpose") or "")]
-            + [str(point) for point in (section.get("key_points") or [])]
-        )
+    passages = evidence.split_passages(raw)
+    if not passages:
+        return []
+    section_text = " ".join(
+        [str(section.get("title") or ""), str(section.get("purpose") or "")]
+        + [str(point) for point in (section.get("key_points") or [])]
     )
-    ranked = sorted(
-        enumerate(pieces),
-        key=lambda item: (len(section_words & _words(item[1])), -item[0]),
-        reverse=True,
-    )[:limit]
+    ranked = evidence.rank_passages(section_text, passages, limit)
     return [
         {"passage_id": f"P{rank + 1}", "text": text[:500]}
-        for rank, (_original_index, text) in enumerate(ranked)
+        for rank, text in enumerate(ranked)
     ]
 
 

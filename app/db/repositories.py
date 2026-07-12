@@ -64,6 +64,7 @@ from app.services.search import (
     search_web,
     summarize_search_sources,
 )
+from app.services.source_eval import evaluate_sources
 from app.services.run_control import (
     clear_cancel,
     clear_stage_progress,
@@ -3077,6 +3078,16 @@ def _run_research_stage(
         except LLMError as exc:
             _fail_pipeline_stage(project_id, run_id, "source_summary", exc)
             raise WorkflowRunFailedError(str(exc)) from exc
+        # Judge the freshly built sources in place before the artifact is stored
+        # so the verdicts persist with them. Isolated so a judge failure never
+        # fails the stage; the pipeline still runs on the P1 heuristics.
+        try:
+            topic_text = f"{project.title} {project.initial_request}"
+            source_summaries["evaluation"] = evaluate_sources(
+                source_summaries.get("sources") or [], topic_text
+            )
+        except Exception as exc:  # pragma: no cover - defensive isolation
+            source_summaries["evaluation"] = {"enabled": True, "error": str(exc)}
         with get_connection() as conn:
             artifact_id = _insert_artifact(
                 conn,
@@ -3099,6 +3110,7 @@ def _run_research_stage(
             {
                 "artifact_id": artifact_id,
                 "source_count": len(source_summaries.get("sources", [])),
+                "evaluation": source_summaries.get("evaluation"),
             },
         )
 
@@ -3635,6 +3647,22 @@ def _run_chapter_research_stage(
         except LLMError as exc:
             _fail_pipeline_stage(project_id, run_id, "chapter_research", exc)
             raise WorkflowRunFailedError(str(exc)) from exc
+        # One shared judge budget across every chapter's sources, evaluated in
+        # place before the artifact is stored. Isolated so a judge failure never
+        # fails the stage.
+        try:
+            topic_text = f"{project.title} {project.initial_request}"
+            all_sources: list[Dict[str, Any]] = []
+            for chapter in chapter_sources.get("chapters") or []:
+                if isinstance(chapter, dict):
+                    all_sources.extend(
+                        source
+                        for source in (chapter.get("sources") or [])
+                        if isinstance(source, dict)
+                    )
+            chapter_sources["evaluation"] = evaluate_sources(all_sources, topic_text)
+        except Exception as exc:  # pragma: no cover - defensive isolation
+            chapter_sources["evaluation"] = {"enabled": True, "error": str(exc)}
         with get_connection() as conn:
             artifact_id = _insert_artifact(
                 conn,
@@ -3662,6 +3690,7 @@ def _run_chapter_research_stage(
                     for chapter in chapter_sources.get("chapters", [])
                 ),
                 "error": chapter_sources.get("error"),
+                "evaluation": chapter_sources.get("evaluation"),
             },
         )
 
