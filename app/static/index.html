@@ -113,6 +113,18 @@
                   <h2 id="detailTitle"></h2>
                   <p id="detailMeta"></p>
                 </div>
+                <div id="statusStrip" class="status-strip" aria-live="polite">
+                  <button id="detailStatus" type="button" class="status-pill" aria-controls="qualityPanel" disabled></button>
+                  <span id="stripMessage" class="strip-message"></span>
+                  <div id="stripProgress" class="strip-progress hidden">
+                    <div class="strip-track"><div id="stripFill" class="strip-fill"></div></div>
+                    <span id="stripPercent" class="strip-percent"></span>
+                  </div>
+                  <div class="strip-actions">
+                    <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
+                    <button id="cancelButton" type="button" class="danger hidden" data-i18n="cancelWriting">Cancel writing</button>
+                  </div>
+                </div>
               </div>
 
               <details id="requestDetails" class="hero-request">
@@ -264,19 +276,6 @@
               </details>
             </section>
 
-            <div id="statusStrip" class="status-strip" aria-live="polite">
-              <span id="detailStatus" class="status-pill"></span>
-              <span id="stripMessage" class="strip-message"></span>
-              <div id="stripProgress" class="strip-progress hidden">
-                <div class="strip-track"><div id="stripFill" class="strip-fill"></div></div>
-                <span id="stripPercent" class="strip-percent"></span>
-              </div>
-              <div class="strip-actions">
-                <button id="runButton" type="button" data-i18n="startWriting">Start Writing</button>
-                <button id="cancelButton" type="button" class="danger hidden" data-i18n="cancelWriting">Cancel writing</button>
-              </div>
-            </div>
-
             <section id="nextAction" class="next-action" aria-live="polite">
               <div class="next-action-head">
                 <p class="eyebrow" data-i18n="nextAction">Next Action</p>
@@ -302,7 +301,10 @@
             <section id="qualityPanel" class="quality-panel hidden" aria-label="Document quality summary">
               <div class="section-head">
                 <h3 data-i18n="qualitySummary">Quality Summary</h3>
-                <span id="qualityStatus" class="quality-status"></span>
+                <div class="inline-controls">
+                  <span id="qualityStatus" class="quality-status"></span>
+                  <button id="qualityClose" type="button" class="icon-button" aria-controls="qualityPanel">✕</button>
+                </div>
               </div>
               <div class="quality-metrics">
                 <div><strong id="qualityStrongSources">0</strong><span data-i18n="strongSources">Strong sources</span></div>

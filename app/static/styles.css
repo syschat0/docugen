@@ -482,36 +482,68 @@ label {
   font-size: 24px;
 }
 
+/* Compact status box on the right of the hero panel. The pill and the run
+ * button stretch to the same width; the width is fixed so text changes
+ * (pill, message, button label) never shift the layout around the box. */
 .status-strip {
-  position: sticky;
-  top: 8px;
-  z-index: 30;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 10px 14px;
-  border: var(--outline);
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 220px;
+  padding: 10px 12px;
+  border: var(--border-thin);
   border-radius: 12px;
-  background: var(--surface);
-  box-shadow: var(--shadow-small);
+  background: var(--surface-muted);
+}
+
+/* Set while a newly opened project's data is still loading. */
+.status-strip.loading {
+  visibility: hidden;
+}
+
+.strip-actions button {
+  flex: 1;
+}
+
+/* The status pill is a button that toggles the quality panel; keep the flat
+ * pill look instead of the raised default-button look. */
+button.status-pill {
+  box-shadow: none;
+}
+
+/* Outranks the global `button:hover` accent background. */
+button.status-pill:hover {
+  background: var(--pink-soft);
+}
+
+button.status-pill:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+button.status-pill:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.hero-top {
+  align-items: flex-start;
 }
 
 .strip-message {
-  flex: 1;
   min-width: 0;
   font-weight: 700;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  font-size: 13px;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .strip-progress {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: none;
-  width: 200px;
+  width: 100%;
 }
 
 .strip-track {
@@ -1222,6 +1254,13 @@ label {
   border: var(--border-thin);
   border-radius: 10px;
   background: var(--surface-muted);
+}
+
+.version-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .version-item {
@@ -2103,6 +2142,15 @@ label {
     align-items: stretch;
     flex-direction: column;
   }
+
+  /* The status box sits below the title here, so let it use the full width. */
+  .status-strip {
+    width: auto;
+  }
+
+  .strip-message {
+    text-align: left;
+  }
 }
 
 @media (max-width: 560px) {
@@ -2183,15 +2231,7 @@ label {
     min-width: 116px;
   }
 
-  .status-strip {
-    flex-wrap: wrap;
-  }
-
   .strip-actions {
-    width: 100%;
-  }
-
-  .strip-progress {
     width: 100%;
   }
 }

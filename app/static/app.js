@@ -22,6 +22,7 @@ const state = {
   compareSelection: [],
   versionsOpen: false,
   progress: null,
+  renderedProjectId: null,
   appliedPhase: null,
   selectedStepPhase: null,
   lastStepDetailKey: null,
@@ -723,6 +724,7 @@ const els = {
   pipelineSummaryText: document.querySelector("#pipelineSummaryText"),
   qualityPanel: document.querySelector("#qualityPanel"),
   qualityToggle: document.querySelector("#qualityToggle"),
+  qualityClose: document.querySelector("#qualityClose"),
   qualityStatus: document.querySelector("#qualityStatus"),
   qualityStrongSources: document.querySelector("#qualityStrongSources"),
   qualityLowSources: document.querySelector("#qualityLowSources"),
@@ -876,6 +878,7 @@ function applyStaticTranslations() {
     node.textContent = t(node.dataset.i18n);
   }
   els.languageSelect?.setAttribute("aria-label", t("language"));
+  els.qualityClose?.setAttribute("aria-label", t("close"));
   els.themeSelect?.setAttribute("aria-label", t("theme"));
   els.questionFilter?.setAttribute("aria-label", t("questions"));
   if (els.themeSelect) {
@@ -1114,19 +1117,31 @@ async function renderSelectedProject() {
     els.docTypeSelect.value = project.document_type || "auto";
   }
 
-  await Promise.all([
-    loadProgress(),
-    loadQuestions(),
-    loadArtifacts(),
-    loadReferences(),
-    loadProjectSettings(),
-    loadQuality(),
-  ]);
-  renderNextAction();
-  renderDraftPreview();
-  renderQuality();
-  renderTabs();
-  applyLayoutPhase();
+  // The parallel loads below each repaint the status box as they resolve
+  // (the pill can flip from the project status to "review needed", and the
+  // message pops in and out). Keep the box invisible until the first full
+  // render of a newly opened project so only the settled state ever paints.
+  const projectChanged = state.renderedProjectId !== project.id;
+  state.renderedProjectId = project.id;
+  if (projectChanged) els.statusStrip.classList.add("loading");
+
+  try {
+    await Promise.all([
+      loadProgress(),
+      loadQuestions(),
+      loadArtifacts(),
+      loadReferences(),
+      loadProjectSettings(),
+      loadQuality(),
+    ]);
+    renderNextAction();
+    renderDraftPreview();
+    renderQuality();
+    renderTabs();
+    applyLayoutPhase();
+  } finally {
+    els.statusStrip.classList.remove("loading");
+  }
 
   if (state.progress?.status === "running") {
     if (!state.progressTimer) startRunPolling();
@@ -1158,8 +1173,16 @@ function renderQuality() {
   if (!quality || !latestDraft()) {
     els.qualityPanel.classList.add("hidden");
     els.qualityToggle?.classList.add("hidden");
+    els.detailStatus.disabled = true;
+    els.detailStatus.removeAttribute("title");
+    els.detailStatus.removeAttribute("aria-expanded");
     return;
   }
+
+  // The status pill doubles as a quality-panel toggle once a summary exists.
+  els.detailStatus.disabled = false;
+  els.detailStatus.title = t("qualitySummary");
+  els.detailStatus.setAttribute("aria-expanded", String(state.qualityOpen));
 
   const needsReview = quality.status === "review_needed";
   // The panel stays collapsed behind this toggle; the status strip, detail
@@ -1182,7 +1205,7 @@ function renderQuality() {
   els.qualityStatus.textContent = t(needsReview ? "qualityReviewNeeded" : "qualityReady");
   if (needsReview) {
     els.detailStatus.textContent = t("qualityReviewNeeded");
-    els.stripMessage.textContent = t("qualityReviewNeeded");
+    setStripMessage(t("qualityReviewNeeded"));
     if (!els.runButton.disabled) els.runButton.textContent = t("improveDraft");
   } else {
     const project = selectedProject();
@@ -2519,6 +2542,23 @@ function renderVersions() {
     return;
   }
 
+  const head = document.createElement("div");
+  head.className = "version-list-head";
+  const heading = document.createElement("p");
+  heading.className = "version-title";
+  heading.textContent = t("versions");
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "icon-button";
+  closeBtn.textContent = "✕";
+  closeBtn.setAttribute("aria-label", t("close"));
+  closeBtn.addEventListener("click", () => {
+    state.versionsOpen = false;
+    updateVersionsVisibility();
+  });
+  head.append(heading, closeBtn);
+  els.versionList.append(head);
+
   const viewed = currentDraft();
   const selectedDrafts = compareDrafts();
   const selectedIds = selectedDrafts.map((draft) => draft.id);
@@ -3317,6 +3357,15 @@ function applyLayoutPhase() {
   els.pipelinePanel.open = phase === "running" || phase === "attention";
 }
 
+// The status pill sits right above the message in the compact box, so drop
+// the message when it would just repeat the pill (e.g. "review needed" twice).
+function setStripMessage(message) {
+  const pillText = (els.detailStatus.textContent || "").trim().toLowerCase();
+  const text = (message || "").trim();
+  els.stripMessage.textContent = text;
+  els.stripMessage.classList.toggle("hidden", !text || text.toLowerCase() === pillText);
+}
+
 function renderStatusStrip() {
   const project = selectedProject();
   if (!project) return;
@@ -3337,11 +3386,14 @@ function renderStatusStrip() {
   } else if (phase === "attention") {
     message = project.status === "cancelled" ? t("runCancelled") : t("pipelineFailed");
   } else if (phase === "review") {
-    message = project.status === "review_needed" ? t("qualityReviewNeeded") : t("reviewDraft");
+    // Match renderQuality's pill text, or the two flip-flop between paints.
+    const needsReview =
+      project.status === "review_needed" || state.quality?.status === "review_needed";
+    message = needsReview ? t("qualityReviewNeeded") : t("reviewDraft");
   } else {
     message = t("startWritingAction");
   }
-  els.stripMessage.textContent = message;
+  setStripMessage(message);
 
   const showProgress = phase === "running" && Boolean(state.progress);
   els.stripProgress.classList.toggle("hidden", !showProgress);
@@ -3505,6 +3557,22 @@ els.qualityToggle?.addEventListener("click", () => {
   state.qualityOpen = !state.qualityOpen;
   localStorage.setItem("docugenQualityPanel", state.qualityOpen ? "open" : "collapsed");
   renderQuality();
+});
+
+els.qualityClose?.addEventListener("click", () => {
+  state.qualityOpen = false;
+  localStorage.setItem("docugenQualityPanel", "collapsed");
+  renderQuality();
+});
+
+els.detailStatus?.addEventListener("click", () => {
+  if (els.detailStatus.disabled) return;
+  state.qualityOpen = !state.qualityOpen;
+  localStorage.setItem("docugenQualityPanel", state.qualityOpen ? "open" : "collapsed");
+  renderQuality();
+  if (state.qualityOpen) {
+    els.qualityPanel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
 });
 
 els.versionsButton?.addEventListener("click", () => {
