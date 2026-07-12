@@ -58,6 +58,14 @@ class Settings:
     source_context_budget_chars: int = int(
         os.getenv("SOURCE_CONTEXT_BUDGET_CHARS", "3000")
     )
+    # Listwise section-fit judge: just before a section is written, one LLM call
+    # scores every candidate source 0-3 for relevance to that section. The writer
+    # uses the score as its top ranking key and drops sources scored <= 1. Off
+    # automatically when the LLM itself is off.
+    section_eval_enabled: bool = _bool_env("SECTION_EVAL_ENABLED", "true")
+    # Maximum real listwise LLM calls per section-writing run. Sections past the
+    # cap fall back to heuristic ranking; cache hits do not count.
+    section_eval_limit: int = int(os.getenv("SECTION_EVAL_LIMIT", "20"))
     # Per-section top-up search: when a section's selected sources have no
     # keyword overlap with the section, run one extra web search for it.
     section_search_enabled: bool = _bool_env("SECTION_SEARCH_ENABLED", "false")

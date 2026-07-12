@@ -24,7 +24,15 @@ from typing import Any, Dict, List
 
 from app.core.config import settings
 from app.db.session import get_connection
-from app.services.llm import LLMError, evaluate_source_quality
+from app.services.evidence import overlap_score
+from app.services.llm import (
+    LLMError,
+    _eval_rank,
+    _section_words,
+    _source_words,
+    evaluate_source_quality,
+    rank_section_relevance,
+)
 from app.services.quality import grade_source
 
 
@@ -221,3 +229,209 @@ def evaluate_sources(
             stats["gated"] += 1
 
     return stats
+
+
+# Prompt revision tag baked into the section-fit cache key. Bump it whenever the
+# listwise ranking prompt changes so stale verdicts are invalidated.
+_SECTION_EVAL_PROMPT_VERSION = "sect-v1"
+
+# Maximum candidates fed into a single listwise ranking prompt. Sources beyond
+# the cap stay unranked (neutral) so the prompt stays small for a small model.
+_SECTION_EVAL_MAX_CANDIDATES = 8
+
+
+def _candidate_text(source: Dict[str, Any]) -> str:
+    """The one-line text used to describe a candidate in prompt and cache key."""
+    evaluation = source.get("eval")
+    if isinstance(evaluation, dict) and evaluation.get("summary"):
+        return str(evaluation["summary"])
+    return str(source.get("summary") or source.get("snippet") or "")
+
+
+def _section_signature(section: Dict[str, Any]) -> str:
+    key_points = "|".join(str(point) for point in (section.get("key_points") or []))
+    return "|".join(
+        [str(section.get("title") or ""), str(section.get("purpose") or ""), key_points]
+    )
+
+
+def _section_cache_key(
+    section: Dict[str, Any], candidates: List[Dict[str, Any]]
+) -> str:
+    parts = []
+    for source in candidates:
+        url = str(source.get("url") or "")
+        text_hash = hashlib.sha256(_candidate_text(source).encode("utf-8")).hexdigest()
+        parts.append(f"{url}#{text_hash}")
+    parts.sort()
+    raw = "|".join(
+        [
+            _SECTION_EVAL_PROMPT_VERSION,
+            settings.llm_model,
+            _section_signature(section),
+            "|".join(parts),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_put_section(
+    cache_key: str, section: Dict[str, Any], fit_map: Dict[str, Dict[str, Any]]
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO source_eval_cache "
+            "(cache_key, url, eval_json, created_at) VALUES (?, ?, ?, ?)",
+            (
+                cache_key,
+                f"section:{section.get('id', '')}",
+                json.dumps(fit_map, ensure_ascii=False),
+                _now(),
+            ),
+        )
+
+
+def _top_candidates(
+    section: Dict[str, Any], pool: List[Dict[str, Any]], limit: int
+) -> List[Dict[str, Any]]:
+    """Pick the heuristically strongest candidates for the listwise prompt.
+
+    Reuses the P2 ranking signal (keyword overlap, judge density, trust) so the
+    single prompt spends its slots on the most promising sources; anything past
+    the cap stays unranked and neutral downstream.
+    """
+    if len(pool) <= limit:
+        return list(pool)
+    section_words = _section_words(section)
+
+    def key(source: Dict[str, Any]) -> tuple[float, float, int]:
+        return (
+            overlap_score(section_words, _source_words(source)),
+            _eval_rank(source),
+            int(grade_source(source)["score"]),
+        )
+
+    return sorted(pool, key=key, reverse=True)[:limit]
+
+
+def _normalize_section_rankings(
+    raw_rankings: List[Any], candidates: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Map 1-based ranking ids back to candidate urls with clamped relevance.
+
+    Out-of-range and duplicate ids are ignored (the first occurrence wins),
+    relevance is coerced to an int and clamped to 0-3, and reason is clipped.
+    Candidates the judge omitted are simply absent, so the caller treats them as
+    neutral.
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+    seen_ids: set[int] = set()
+    for entry in raw_rankings:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            ident = int(entry.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if ident in seen_ids or ident < 1 or ident > len(candidates):
+            continue
+        seen_ids.add(ident)
+        url = str(candidates[ident - 1].get("url") or "")
+        if not url:
+            continue
+        try:
+            relevance = int(float(entry.get("relevance")))
+        except (TypeError, ValueError):
+            relevance = 0
+        result[url] = {
+            "relevance": max(0, min(3, relevance)),
+            "reason": _clip(entry.get("reason"), 100),
+        }
+    return result
+
+
+def _restore_section_map(
+    cached: Dict[str, Any], candidates: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Rebuild a fit map from a cached verdict, keeping only current candidates."""
+    urls = {str(source.get("url") or "") for source in candidates}
+    result: Dict[str, Dict[str, Any]] = {}
+    for url, entry in cached.items():
+        if url not in urls or not isinstance(entry, dict):
+            continue
+        try:
+            relevance = int(entry.get("relevance"))
+        except (TypeError, ValueError):
+            continue
+        result[url] = {
+            "relevance": max(0, min(3, relevance)),
+            "reason": _clip(entry.get("reason"), 100),
+        }
+    return result
+
+
+def rank_sources_for_section(
+    section: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    allow_llm_call: bool = True,
+) -> tuple[Dict[str, Dict[str, Any]] | None, Dict[str, Any]]:
+    """Listwise-rank a section's candidate sources by relevance in one LLM call.
+
+    Returns ``(fit_map, stats)`` where ``fit_map`` is ``{url: {"relevance": int,
+    "reason": str}}`` for the ranked candidates, or ``None`` when ranking is
+    disabled, budget-skipped (``allow_llm_call`` false on a cache miss), or
+    failed. ``stats`` always reports what happened. The candidate source dicts
+    are never mutated — the same dict is reused across sections, so a per-section
+    verdict travels only in the returned map. A raised exception never escapes;
+    an ``LLMError`` degrades to ``(None, stats)`` so section writing continues.
+    """
+    stats: Dict[str, Any] = {
+        "called": False,
+        "cache_hit": False,
+        "ranked": 0,
+        "excluded": 0,
+        "error": None,
+    }
+    if not settings.section_eval_enabled or not settings.llm_enabled:
+        return None, stats
+
+    pool = [
+        source
+        for source in candidates
+        if isinstance(source, dict) and source.get("url")
+    ]
+    if not pool:
+        return None, stats
+
+    ranked_candidates = _top_candidates(
+        section, pool, _SECTION_EVAL_MAX_CANDIDATES
+    )
+    cache_key = _section_cache_key(section, ranked_candidates)
+
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        stats["cache_hit"] = True
+        fit_map = _restore_section_map(cached, ranked_candidates)
+        stats["ranked"] = len(fit_map)
+        stats["excluded"] = sum(
+            1 for entry in fit_map.values() if entry["relevance"] <= 1
+        )
+        return fit_map, stats
+
+    if not allow_llm_call:
+        return None, stats
+
+    try:
+        raw_rankings, _usage = rank_section_relevance(section, ranked_candidates)
+    except LLMError as exc:
+        stats["error"] = str(exc)
+        return None, stats
+
+    stats["called"] = True
+    fit_map = _normalize_section_rankings(raw_rankings, ranked_candidates)
+    _cache_put_section(cache_key, section, fit_map)
+    stats["ranked"] = len(fit_map)
+    stats["excluded"] = sum(
+        1 for entry in fit_map.values() if entry["relevance"] <= 1
+    )
+    return fit_map, stats

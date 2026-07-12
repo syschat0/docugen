@@ -64,7 +64,7 @@ from app.services.search import (
     search_web,
     summarize_search_sources,
 )
-from app.services.source_eval import evaluate_sources
+from app.services.source_eval import evaluate_sources, rank_sources_for_section
 from app.services.run_control import (
     clear_cancel,
     clear_stage_progress,
@@ -2070,7 +2070,20 @@ def _sources_for_section(
     chapter_sources: Dict[str, Any] | None,
     research: Dict[str, Any] | None,
     project_text: str = "",
-) -> list[Dict[str, Any]]:
+    *,
+    section_eval_info: list[Dict[str, Any]] | None = None,
+    allow_section_eval: bool = False,
+) -> tuple[list[Dict[str, Any]], Dict[str, Dict[str, Any]] | None]:
+    """Select a section's sources, optionally reranked by a listwise LLM judge.
+
+    Returns ``(sources, section_fit)`` where ``section_fit`` is the per-url
+    relevance map used for ranking, or ``None`` when listwise evaluation did not
+    run. When ``section_eval_info`` is supplied (the section-writing loop), the
+    candidate pool is scored in one LLM call whose stats are appended there;
+    ``allow_section_eval`` gates whether that real call may be made (run budget),
+    while cache hits are always served. The final-merge caller omits both and
+    keeps the pure-heuristic path.
+    """
     chapter_id = str(section.get("id", "")).split(".")[0]
     chapter_candidates: list[Dict[str, Any]] = []
     for chapter in (chapter_sources or {}).get("chapters") or []:
@@ -2084,13 +2097,53 @@ def _sources_for_section(
             for result in (research or {}).get("results") or []
             if isinstance(result, dict)
         ]
-    return select_section_sources(
+
+    section_fit: Dict[str, Dict[str, Any]] | None = None
+    if section_eval_info is not None:
+        section_fit, stats = rank_sources_for_section(
+            section,
+            chapter_candidates + global_candidates,
+            allow_llm_call=allow_section_eval,
+        )
+        if stats["called"] or stats["cache_hit"] or stats["error"]:
+            section_eval_info.append(
+                {"section_id": str(section.get("id", "")), **stats}
+            )
+
+    sources = select_section_sources(
         section,
         chapter_candidates,
         global_candidates,
         limit=2,
         project_text=project_text,
+        section_fit=section_fit,
     )
+    return sources, section_fit
+
+
+def _eval_marks_relevant(
+    section_sources: list[Dict[str, Any]],
+    section_fit: Dict[str, Dict[str, Any]] | None,
+) -> bool:
+    """True when listwise evaluation scored a selected source relevant (>= 2).
+
+    Used to suppress the zero-overlap "no_relevant_source" top-up: if the judge
+    considered a chosen source relevant, a lack of lexical overlap is not a
+    reason to re-search for that section.
+    """
+    if not section_fit:
+        return False
+    for source in section_sources:
+        if not isinstance(source, dict):
+            continue
+        entry = section_fit.get(str(source.get("url") or ""))
+        if isinstance(entry, dict):
+            try:
+                if int(entry.get("relevance", 0)) >= 2:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
 
 
 def _reexpand_section_plan(
@@ -2538,7 +2591,7 @@ def _build_final_draft_content(
                         project_text=(
                             f"{inputs.project.title} {inputs.project.initial_request}"
                         ),
-                    )
+                    )[0]
                 )
                 if citations_enabled
                 else [],
@@ -3923,6 +3976,7 @@ def _run_new_section_writing_stage(
     )
     chapter_titles = _chapter_titles_from_plan(section_plan)
     topup_info: list[Dict[str, Any]] = []
+    section_eval_info: list[Dict[str, Any]] = []
     chapter_digests: list[Dict[str, Any]] = []
     digest_usage: list[Dict[str, Any]] = []
     glossary_counts: dict[str, int] = {}
@@ -3969,11 +4023,25 @@ def _run_new_section_writing_stage(
             current_chapter_id = section_chapter
 
             project_text = f"{project.title} {project.initial_request}"
-            section_sources = _sources_for_section(
+            # Budget counts real LLM attempts (successes and errors alike); cache
+            # hits are free, so a flaky endpoint still stops after the cap.
+            allow_section_eval = (
+                settings.section_eval_enabled
+                and settings.llm_enabled
+                and sum(
+                    1
+                    for info in section_eval_info
+                    if info.get("called") or info.get("error")
+                )
+                < settings.section_eval_limit
+            )
+            section_sources, section_fit = _sources_for_section(
                 section,
                 chapter_sources,
                 research,
                 project_text=project_text,
+                section_eval_info=section_eval_info,
+                allow_section_eval=allow_section_eval,
             )
             needs_source_quality_topup = (
                 is_high_stakes_topic(project_text)
@@ -3988,12 +4056,19 @@ def _run_new_section_writing_stage(
                 )
                 == 0
             )
+            # A source the listwise judge scored relevant (>= 2) is not a reason
+            # to re-search just because it lacks lexical overlap, so it suppresses
+            # the "no_relevant_source" top-up (the high-stakes path is unchanged).
+            eval_relevant = _eval_marks_relevant(section_sources, section_fit)
             if (
                 effective_section_search_enabled(project_id)
                 and effective_search_enabled(project_id)
                 and len(topup_info) < settings.section_search_topup_limit
                 and (
-                    best_overlap_score(section, section_sources) == 0
+                    (
+                        best_overlap_score(section, section_sources) == 0
+                        and not eval_relevant
+                    )
                     or needs_source_quality_topup
                 )
             ):
@@ -4131,6 +4206,11 @@ def _run_new_section_writing_stage(
                 )[:15]
             ],
             **({"topup_searches": topup_info} if topup_info else {}),
+            **(
+                {"section_evaluations": section_eval_info}
+                if section_eval_info
+                else {}
+            ),
         },
         token_usage=token_usage or None,
     )
