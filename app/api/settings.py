@@ -1,6 +1,21 @@
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.settings import LLMConfigRead, LLMConfigUpdate, LLMTestResult
+from app.schemas.settings import (
+    ImageConfigRead,
+    ImageConfigUpdate,
+    ImageTestResult,
+    LLMConfigRead,
+    LLMConfigUpdate,
+    LLMTestResult,
+)
+from app.services.image_settings import (
+    PROVIDERS as IMAGE_PROVIDERS,
+    ImageConfigError,
+    get_active_image_config,
+    public_config as image_public_config,
+    set_active_image_config,
+    test_image_config,
+)
 from app.services.llm_settings import (
     PROVIDERS,
     LLMConfigError,
@@ -38,3 +53,30 @@ def test_llm_settings(payload: LLMConfigUpdate) -> LLMTestResult:
         payload.provider, payload.base_url, payload.api_key, payload.model
     )
     return LLMTestResult(**result)
+
+
+@router.get("/image", response_model=ImageConfigRead)
+def get_image_settings() -> ImageConfigRead:
+    return ImageConfigRead(
+        active=image_public_config(get_active_image_config()),
+        providers=IMAGE_PROVIDERS,
+    )
+
+
+@router.put("/image", response_model=ImageConfigRead)
+def update_image_settings(payload: ImageConfigUpdate) -> ImageConfigRead:
+    try:
+        config = set_active_image_config(
+            payload.provider, payload.base_url, payload.api_key, payload.model
+        )
+    except ImageConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ImageConfigRead(active=image_public_config(config), providers=IMAGE_PROVIDERS)
+
+
+@router.post("/image/test", response_model=ImageTestResult)
+def test_image_settings(payload: ImageConfigUpdate) -> ImageTestResult:
+    result = test_image_config(
+        payload.provider, payload.base_url, payload.api_key, payload.model
+    )
+    return ImageTestResult(**result)

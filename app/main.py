@@ -36,6 +36,11 @@ app.include_router(settings_router)
 static_dir = Path(__file__).parent / "static"
 app.mount("/ui", StaticFiles(directory=static_dir, html=True), name="ui")
 
+# Generated section illustrations are served from here. StaticFiles errors on a
+# missing directory, so create it before mounting.
+settings.media_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
+
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:

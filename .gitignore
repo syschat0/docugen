@@ -4,6 +4,7 @@ __pycache__/
 .env
 data/app.sqlite3
 data/app.sqlite3-*
+data/media/
 data/projects/
 data/slm-eval/
 outputs/

@@ -201,6 +201,9 @@ const translations = {
     llmTesting: "Testing connection…",
     llmTestOk: "Connected. Model: {model}",
     llmTestFail: "Failed: {error}",
+    imageSettingsTitle: "Image generation",
+    imageSettingsSub: "Optionally add one conceptual illustration under some sections.",
+    imageSaved: "Image provider saved.",
     rendered: "Rendered",
     reranFrom: "Reran from {phase}.",
     rerunConfirm: "Rerun from {phase}? Downstream artifacts will be regenerated.",
@@ -572,6 +575,9 @@ const translations = {
     llmTesting: "연결 테스트 중…",
     llmTestOk: "연결 성공. 모델: {model}",
     llmTestFail: "실패: {error}",
+    imageSettingsTitle: "이미지 생성",
+    imageSettingsSub: "일부 섹션 아래에 개념 일러스트를 한 장씩 추가할 수 있습니다.",
+    imageSaved: "이미지 프로바이더를 저장했습니다.",
     rendered: "서식 보기",
     reranFrom: "{phase} 단계부터 다시 실행했습니다.",
     rerunConfirm: "{phase} 단계부터 다시 실행할까요? 이후 산출물은 다시 생성됩니다.",
@@ -785,9 +791,21 @@ const els = {
   llmTestResult: document.querySelector("#llmTestResult"),
   llmTestButton: document.querySelector("#llmTestButton"),
   llmSaveButton: document.querySelector("#llmSaveButton"),
+  imageProvider: document.querySelector("#imageProvider"),
+  imageBaseUrlRow: document.querySelector("#imageBaseUrlRow"),
+  imageBaseUrl: document.querySelector("#imageBaseUrl"),
+  imageApiKeyRow: document.querySelector("#imageApiKeyRow"),
+  imageApiKey: document.querySelector("#imageApiKey"),
+  imageModelRow: document.querySelector("#imageModelRow"),
+  imageModel: document.querySelector("#imageModel"),
+  imageProviderNote: document.querySelector("#imageProviderNote"),
+  imageTestResult: document.querySelector("#imageTestResult"),
+  imageTestButton: document.querySelector("#imageTestButton"),
+  imageSaveButton: document.querySelector("#imageSaveButton"),
 };
 
 const llmSettingsState = { providers: [], active: null, loaded: false };
+const imageSettingsState = { providers: [], active: null, loaded: false };
 
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
@@ -4000,7 +4018,10 @@ async function openLlmSettings() {
   try {
     if (!llmSettingsState.loaded) await loadLlmSettings();
     else fillLlmFormForProvider(llmSettingsState.active?.provider);
+    if (!imageSettingsState.loaded) await loadImageSettings();
+    else fillImageFormForProvider(imageSettingsState.active?.provider);
     els.llmTestResult.classList.add("hidden");
+    els.imageTestResult.classList.add("hidden");
     els.llmSettingsModal.showModal();
   } catch (error) {
     showToast(error.message, true);
@@ -4046,6 +4067,105 @@ async function testLlmSettings() {
   }
 }
 
+function currentImageProviderMeta() {
+  const id = els.imageProvider.value;
+  return imageSettingsState.providers.find((preset) => preset.id === id) || null;
+}
+
+function populateImageProviderSelect() {
+  els.imageProvider.innerHTML = "";
+  for (const preset of imageSettingsState.providers) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = providerLabel(preset);
+    els.imageProvider.append(option);
+  }
+}
+
+function renderImageProviderFields() {
+  const preset = currentImageProviderMeta();
+  if (!preset) return;
+  els.imageBaseUrlRow.classList.toggle("hidden", !preset.base_url_editable);
+  els.imageApiKeyRow.classList.toggle("hidden", !preset.needs_api_key);
+  els.imageModelRow.classList.toggle("hidden", !preset.model_editable);
+  els.imageProviderNote.textContent = providerNote(preset);
+  els.imageTestResult.classList.add("hidden");
+}
+
+function fillImageFormForProvider(providerId) {
+  const preset = imageSettingsState.providers.find((item) => item.id === providerId);
+  if (!preset) return;
+  const active = imageSettingsState.active;
+  const isActive = active && active.provider === providerId;
+  els.imageProvider.value = providerId;
+  els.imageBaseUrl.value = isActive ? active.base_url : preset.base_url;
+  els.imageModel.value = isActive ? active.model : preset.default_model;
+  els.imageApiKey.value = "";
+  els.imageApiKey.placeholder =
+    isActive && active.has_api_key ? active.api_key_masked : "sk-...";
+  renderImageProviderFields();
+}
+
+async function loadImageSettings() {
+  const data = await api("/settings/image");
+  imageSettingsState.providers = data.providers || [];
+  imageSettingsState.active = data.active || null;
+  imageSettingsState.loaded = true;
+  populateImageProviderSelect();
+  fillImageFormForProvider(
+    imageSettingsState.active?.provider || imageSettingsState.providers[0]?.id,
+  );
+}
+
+function collectImageForm() {
+  const preset = currentImageProviderMeta();
+  const payload = { provider: els.imageProvider.value };
+  if (preset?.base_url_editable) payload.base_url = els.imageBaseUrl.value.trim();
+  if (preset?.model_editable) payload.model = els.imageModel.value.trim();
+  const key = els.imageApiKey.value.trim();
+  payload.api_key = key ? key : null;
+  return payload;
+}
+
+async function saveImageSettings() {
+  try {
+    const data = await api("/settings/image", {
+      method: "PUT",
+      body: JSON.stringify(collectImageForm()),
+    });
+    imageSettingsState.active = data.active;
+    showToast(t("imageSaved"));
+    els.llmSettingsModal.close();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function testImageSettings() {
+  els.imageTestButton.disabled = true;
+  els.imageTestResult.classList.remove("hidden");
+  els.imageTestResult.classList.remove("ok", "error");
+  els.imageTestResult.textContent = t("llmTesting");
+  try {
+    const result = await api("/settings/image/test", {
+      method: "POST",
+      body: JSON.stringify(collectImageForm()),
+    });
+    if (result.ok) {
+      els.imageTestResult.classList.add("ok");
+      els.imageTestResult.textContent = t("llmTestOk", { model: result.model });
+    } else {
+      els.imageTestResult.classList.add("error");
+      els.imageTestResult.textContent = t("llmTestFail", { error: result.error || "" });
+    }
+  } catch (error) {
+    els.imageTestResult.classList.add("error");
+    els.imageTestResult.textContent = t("llmTestFail", { error: error.message });
+  } finally {
+    els.imageTestButton.disabled = false;
+  }
+}
+
 els.llmSettingsButton?.addEventListener("click", openLlmSettings);
 els.llmSettingsClose?.addEventListener("click", () => els.llmSettingsModal.close());
 els.llmProvider?.addEventListener("change", () =>
@@ -4053,6 +4173,11 @@ els.llmProvider?.addEventListener("change", () =>
 );
 els.llmTestButton?.addEventListener("click", testLlmSettings);
 els.llmSaveButton?.addEventListener("click", saveLlmSettings);
+els.imageProvider?.addEventListener("change", () =>
+  fillImageFormForProvider(els.imageProvider.value),
+);
+els.imageTestButton?.addEventListener("click", testImageSettings);
+els.imageSaveButton?.addEventListener("click", saveImageSettings);
 
 async function boot() {
   if (!translations[state.language]) {

@@ -1517,6 +1517,14 @@ button.status-pill:disabled {
   margin: 0 0 12px;
 }
 
+.markdown-body img {
+  border-radius: 12px;
+  display: block;
+  height: auto;
+  margin: 14px auto 6px;
+  max-width: 100%;
+}
+
 .markdown-body ul,
 .markdown-body ol {
   margin: 0 0 14px;

@@ -98,6 +98,24 @@ class Settings:
     # the engine ID (cx) from programmablesearchengine.google.com.
     google_pse_api_key: str = os.getenv("GOOGLE_PSE_API_KEY", "").strip()
     google_pse_cx: str = os.getenv("GOOGLE_PSE_CX", "").strip()
+    # Section illustrations. Empty IMAGE_PROVIDER disables the stage entirely
+    # (the default), so documents generate exactly as before. The provider /
+    # key / model can also be set at runtime from the UI, which overrides these.
+    image_provider: str = os.getenv("IMAGE_PROVIDER", "").strip().lower()  # ""=disabled
+    image_api_key: str = os.getenv("IMAGE_API_KEY", "").strip()
+    image_base_url: str = os.getenv("IMAGE_BASE_URL", "").strip()
+    image_model: str = os.getenv("IMAGE_MODEL", "").strip()
+    # Hard ceiling on generated images per document; the planner may pick fewer.
+    image_max_per_doc: int = int(os.getenv("IMAGE_MAX_PER_DOC", "5"))
+    image_size: str = os.getenv("IMAGE_SIZE", "1536x1024")
+    image_timeout_seconds: int = int(os.getenv("IMAGE_TIMEOUT_SECONDS", "120"))
+    # Appended to every generation prompt to keep a consistent, text-free style.
+    image_style_suffix: str = os.getenv(
+        "IMAGE_STYLE_SUFFIX",
+        "clean flat vector illustration, soft muted colors, no text or lettering",
+    )
+    # Generated PNGs are cached here by prompt hash so re-runs never re-bill.
+    media_dir: Path = Path(os.getenv("MEDIA_DIR", "data/media"))
 
 
 settings = Settings()

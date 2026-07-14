@@ -1,6 +1,6 @@
 import threading
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app.db.repositories import (
     WorkflowCancelledError,
@@ -140,10 +140,11 @@ def restore_draft_version_endpoint(project_id: str, artifact_id: str) -> Artifac
 
 
 @router.post("/export", response_model=ExportRead)
-def export_project_markdown_endpoint(project_id: str) -> ExportRead:
+def export_project_markdown_endpoint(project_id: str, request: Request) -> ExportRead:
     if get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    result = export_project_markdown(project_id)
+    base_url = str(request.base_url).rstrip("/")
+    result = export_project_markdown(project_id, base_url=base_url)
     if result is None:
         raise HTTPException(status_code=404, detail="Draft artifact not found")
     return result

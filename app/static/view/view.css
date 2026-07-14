@@ -121,6 +121,14 @@ body {
   line-height: 1.75;
 }
 
+.a4-body img {
+  border-radius: 12px;
+  display: block;
+  height: auto;
+  margin: 14px auto 6px;
+  max-width: 100%;
+}
+
 .a4-body h1,
 .a4-body h2,
 .a4-body h3,

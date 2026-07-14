@@ -1,5 +1,6 @@
 import json
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,7 +45,9 @@ from app.services.llm import (
     generate_outline,
     generate_section_plan,
     best_overlap_score,
+    plan_section_illustrations,
     plan_user_questions,
+    select_illustration_entries,
     repair_section_evidence,
     repair_sentence_quality_sections,
     review_continuity_staged,
@@ -63,6 +66,11 @@ from app.services.search import (
     search_section_sources,
     search_web,
     summarize_search_sources,
+)
+from app.services.image_gen import ImageGenError, generate_section_image
+from app.services.image_settings import (
+    get_active_image_config,
+    image_generation_enabled,
 )
 from app.services.source_eval import evaluate_sources, rank_sources_for_section
 from app.services.run_control import (
@@ -121,6 +129,7 @@ PIPELINE_STAGES: tuple[PipelineStageSpec, ...] = (
     PipelineStageSpec("continuity_review", "Continuity review", ("continuity_review",)),
     PipelineStageSpec("rubric_review", "Rubric review", ("rubric_review",)),
     PipelineStageSpec("targeted_revision", "Targeted revision", ("targeted_revision",)),
+    PipelineStageSpec("illustration", "Illustrations", ("illustration_plan",)),
     PipelineStageSpec("final_merge", "Final merge", ("draft",)),
 )
 
@@ -1334,7 +1343,9 @@ def get_latest_artifact(project_id: str, artifact_type: str) -> Optional[Artifac
     return _latest_artifact(project_id, artifact_type)
 
 
-def export_project_markdown(project_id: str) -> Optional[ExportRead]:
+def export_project_markdown(
+    project_id: str, base_url: str | None = None
+) -> Optional[ExportRead]:
     draft = _latest_artifact(project_id, "draft")
     if draft is None or not draft.content:
         return None
@@ -1342,6 +1353,11 @@ def export_project_markdown(project_id: str) -> Optional[ExportRead]:
     markdown = draft.content.get("markdown")
     if not isinstance(markdown, str) or not markdown.strip():
         return None
+
+    # Rewrite root-relative image links to absolute so the exported file renders
+    # its illustrations outside the running server.
+    if base_url:
+        markdown = markdown.replace("](/media/", f"]({base_url}/media/")
 
     export_path = settings.database_path.parent / "projects" / project_id / "exports" / "final.md"
     export_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2572,6 +2588,41 @@ class FinalMergeInputs:
     citation_style: str
 
 
+def _usable_illustrations(project_id: str) -> Dict[str, Dict[str, Any]]:
+    """Map section_id -> illustration entry for images that exist on disk.
+
+    Best effort: any read problem (no plan, no table) yields no illustrations so
+    the merge always succeeds. Only successfully generated/cached files are used.
+    """
+    try:
+        artifact = _latest_artifact(project_id, "illustration_plan")
+    except Exception:
+        return {}
+    if artifact is None or not artifact.content:
+        return {}
+    result: Dict[str, Dict[str, Any]] = {}
+    for entry in artifact.content.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("status") not in {"generated", "cached"}:
+            continue
+        file_name = str(entry.get("file") or "")
+        if not file_name or not (settings.media_dir / file_name).exists():
+            continue
+        section_id = str(entry.get("section_id") or "")
+        if section_id:
+            result[section_id] = entry
+    return result
+
+
+def _apply_section_illustration(
+    markdown: str, entry: Dict[str, Any] | None
+) -> str:
+    if not entry:
+        return markdown
+    return _insert_illustration(markdown, entry)
+
+
 def _build_final_draft_content(
     inputs: FinalMergeInputs,
 ) -> tuple[Dict[str, Any], str, list[str], dict[str, Any] | None]:
@@ -2612,8 +2663,17 @@ def _build_final_draft_content(
         merge_mode = "llm_seam"
     else:
         merge_mode = "local"
+    illustrations_by_section = _usable_illustrations(inputs.project_id)
     merge_inputs = [
-        {"section": draft["section"], "markdown": draft["markdown"]}
+        {
+            "section": draft["section"],
+            "markdown": _apply_section_illustration(
+                draft["markdown"],
+                illustrations_by_section.get(
+                    str((draft.get("section") or {}).get("id") or "")
+                ),
+            ),
+        }
         for draft in renumbered_drafts
     ]
     final_markdown = _local_merge(
@@ -2738,6 +2798,12 @@ class TargetedRevisionStageResult:
     section_drafts: list[Dict[str, Any]]
     revision: Dict[str, Any]
     revision_time: str
+    artifact_ids: list[str]
+
+
+@dataclass(frozen=True)
+class IllustrationStageResult:
+    illustration_time: str
     artifact_ids: list[str]
 
 
@@ -4697,6 +4763,238 @@ def _run_targeted_revision_stage(
     )
 
 
+def _illustration_conditions(config: Dict[str, str]) -> Dict[str, Any]:
+    return {
+        "provider": config.get("provider"),
+        "model": config.get("model"),
+        "size": settings.image_size,
+        "max_images": settings.image_max_per_doc,
+    }
+
+
+def _document_language(project: ProjectRead) -> str:
+    """Coarse label for caption/alt language: Korean if the request has Hangul."""
+    text = f"{project.title} {project.initial_request}"
+    return "Korean" if re.search(r"[가-힣]", text) else "English"
+
+
+def _illustration_plan_has_failures(content: Dict[str, Any] | None) -> bool:
+    """True when the stored plan recorded a planner error or a failed image."""
+    data = content or {}
+    if data.get("error"):
+        return True
+    return any(
+        isinstance(entry, dict) and entry.get("status") == "failed"
+        for entry in data.get("entries") or []
+    )
+
+
+def _run_illustration_stage(
+    project_id: str,
+    project: ProjectRead,
+    section_drafts: list[Dict[str, Any]],
+    summaries: list[Dict[str, Any]],
+    revision_time: str,
+    force_from: str | None,
+    agent_name: str,
+) -> IllustrationStageResult:
+    """Plan and generate section illustrations after the drafts are final.
+
+    Disabled by default: with no image provider the stage completes as a
+    "skipped" reuse run and writes no artifact, so the document is unchanged. A
+    failed image never fails the run — it is recorded on its entry and skipped.
+    """
+    if not image_generation_enabled():
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "illustration",
+            {"skipped": True, "reason": "disabled"},
+        )
+        return IllustrationStageResult(illustration_time=revision_time, artifact_ids=[])
+
+    config = get_active_image_config()
+    conditions = _illustration_conditions(config)
+
+    existing = _latest_artifact(project_id, "illustration_plan")
+    # A plan with failures is never reused: failed API calls were not billed,
+    # so retrying is free when the cause was transient, and images that did
+    # generate are still served from the media cache.
+    if (
+        existing is not None
+        and _is_fresh(existing.updated_at, revision_time)
+        and ((existing.content or {}).get("conditions") == conditions)
+        and not _illustration_plan_has_failures(existing.content)
+        and force_from != "illustration"
+    ):
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "illustration",
+            {"artifact_id": existing.id},
+        )
+        return IllustrationStageResult(
+            illustration_time=existing.updated_at, artifact_ids=[existing.id]
+        )
+
+    run_id = _start_agent_run(
+        project_id,
+        agent_name,
+        "illustration",
+        {"section_count": len(section_drafts), "provider": config.get("provider")},
+    )
+
+    summary_by_id = {
+        str(item.get("section_id") or item.get("node_id") or ""): str(
+            item.get("summary") or ""
+        )
+        for item in summaries
+        if isinstance(item, dict)
+    }
+    planner_sections: list[Dict[str, Any]] = []
+    drafts_markdown_by_section_id: Dict[str, str] = {}
+    for draft in section_drafts:
+        section = draft.get("section") or {}
+        section_id = str(section.get("id") or "")
+        if not section_id:
+            continue
+        drafts_markdown_by_section_id[section_id] = str(draft.get("markdown") or "")
+        planner_sections.append(
+            {
+                "id": section_id,
+                "title": str(section.get("title") or ""),
+                "summary": summary_by_id.get(section_id, ""),
+            }
+        )
+
+    entries: list[Dict[str, Any]] = []
+    plan_error: str | None = None
+    usage = None
+    if planner_sections and settings.llm_enabled:
+        try:
+            parsed, usage = plan_section_illustrations(
+                planner_sections,
+                max_images=settings.image_max_per_doc,
+                language=_document_language(project),
+            )
+            selected = select_illustration_entries(
+                parsed,
+                planner_sections,
+                drafts_markdown_by_section_id,
+                settings.image_max_per_doc,
+            )
+        except LLMError as exc:
+            # A failed plan must not fail the run; record it and produce no images.
+            plan_error = str(exc)
+            selected = []
+    else:
+        selected = []
+
+    generated = cached = failed = 0
+    for item in selected:
+        if is_cancel_requested(project_id):
+            raise WorkflowCancelledError()
+        prompt = item["prompt"]
+        path = _cache_image_path(config, prompt)
+        pre_existing = path.exists()
+        entry: Dict[str, Any] = {
+            "section_id": item["section_id"],
+            "prompt": prompt,
+            "caption": item["caption"],
+            "alt": item["alt"],
+            "file": path.name,
+            "url": f"/media/{path.name}",
+            "status": "cached" if pre_existing else "generated",
+            "error": None,
+        }
+        try:
+            generate_section_image(prompt, config=config)
+        except ImageGenError as exc:
+            entry["status"] = "failed"
+            entry["error"] = str(exc)
+            failed += 1
+        else:
+            if pre_existing:
+                cached += 1
+            else:
+                generated += 1
+        entries.append(entry)
+
+    content = {
+        "entries": entries,
+        "conditions": conditions,
+        "error": plan_error,
+    }
+    with get_connection() as conn:
+        artifact_id = _insert_artifact(
+            conn,
+            project_id,
+            "illustration_plan",
+            "Section illustrations",
+            content,
+            utc_now_iso(),
+            agent_name,
+        )
+    artifact = get_artifact(project_id, artifact_id)
+    illustration_time = artifact.updated_at if artifact else utc_now_iso()
+    _complete_agent_run(
+        run_id,
+        {
+            "artifact_id": artifact_id,
+            "generated": generated,
+            "cached": cached,
+            "failed": failed,
+            "error": plan_error,
+        },
+        token_usage=usage,
+    )
+    return IllustrationStageResult(
+        illustration_time=illustration_time, artifact_ids=[artifact_id]
+    )
+
+
+def _cache_image_path(config: Dict[str, str], prompt: str):
+    """Mirror image_gen's cache filename so the plan can record it before generating."""
+    from app.services.image_gen import _cache_path
+
+    return _cache_path(
+        config.get("provider") or "", config.get("model") or "", settings.image_size, prompt
+    )
+
+
+def _insert_illustration(markdown: str, entry: dict) -> str:
+    """Insert the image block after the section's first heading line.
+
+    Places a blank line, the image, a blank line, an italic caption, and a blank
+    line right after the first ``#`` heading (or at the very top when there is no
+    heading). alt/caption are lightly sanitized — brackets would break the image
+    syntax — without heavy escaping.
+    """
+
+    def _safe(text: Any) -> str:
+        return str(text or "").replace("[", "(").replace("]", ")").strip()
+
+    alt = _safe(entry.get("alt")) or _safe(entry.get("caption"))
+    url = str(entry.get("url") or "")
+    caption = str(entry.get("caption") or "").replace("*", "").strip()
+    image_line = f"![{alt}]({url})"
+    block = [image_line]
+    if caption:
+        block.append("")
+        block.append(f"*{caption}*")
+
+    lines = markdown.split("\n")
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            insert_at = index + 1
+            new_lines = (
+                lines[:insert_at] + ["", *block, ""] + lines[insert_at:]
+            )
+            return "\n".join(new_lines)
+    # No heading: prepend the block.
+    return "\n".join([*block, "", markdown])
+
+
 def run_document_generation(
     project_id: str, force_from: str | None = None
 ) -> Optional[WorkflowRunRead]:
@@ -4915,6 +5213,20 @@ def _run_document_generation(
         revision_time = revision_result.revision_time
         artifact_ids.extend(revision_result.artifact_ids)
 
+        illustration_result = _run_illustration_stage(
+            project_id,
+            project,
+            section_drafts,
+            summaries,
+            revision_time,
+            force_from,
+            agent_name,
+        )
+        artifact_ids.extend(illustration_result.artifact_ids)
+        # A refreshed illustration plan must re-merge the draft, so the merge's
+        # freshness is gated on whichever of the two is newer.
+        merge_cutoff = max(revision_time, illustration_result.illustration_time)
+
         citation_style = effective_citation_style(project_id)
         draft_artifact = _latest_artifact(project_id, "draft")
         # A citation-style change re-renders only this stage: section drafts
@@ -4924,7 +5236,7 @@ def _run_document_generation(
         ) if draft_artifact is not None else None
         if (
             draft_artifact is not None
-            and _is_fresh(draft_artifact.updated_at, revision_time)
+            and _is_fresh(draft_artifact.updated_at, merge_cutoff)
             and draft_style == citation_style
             and force_from != "final_merge"
         ):
@@ -5231,6 +5543,29 @@ def _workflow_step_details(
         details["section_count"] = len(
             revision.get("revised_section_ids") or revision.get("sections") or []
         )
+    elif phase == "illustration":
+        plan = (artifacts_by_type.get("illustration_plan") or [{}])[-1].get("content") or {}
+        entries = plan.get("entries") or []
+        details["image_count"] = len(entries)
+        details["generated_count"] = sum(
+            1 for e in entries if isinstance(e, dict) and e.get("status") == "generated"
+        )
+        details["cached_count"] = sum(
+            1 for e in entries if isinstance(e, dict) and e.get("status") == "cached"
+        )
+        details["failed_count"] = sum(
+            1 for e in entries if isinstance(e, dict) and e.get("status") == "failed"
+        )
+        details["error"] = plan.get("error")
+        details["images"] = [
+            {
+                "section_id": e.get("section_id"),
+                "caption": _short_text(e.get("caption", ""), 120),
+                "status": e.get("status"),
+            }
+            for e in entries[:8]
+            if isinstance(e, dict)
+        ]
     elif phase == "final_merge":
         draft = (artifacts_by_type.get("draft") or [{}])[-1].get("content") or {}
         markdown = draft.get("markdown", "")
@@ -5318,6 +5653,7 @@ def get_workflow_progress(project_id: str) -> Optional[WorkflowProgressRead]:
         "continuity_review": artifact_times.get("continuity_review"),
         "rubric_review": artifact_times.get("rubric_review"),
         "targeted_revision": artifact_times.get("targeted_revision"),
+        "illustration": artifact_times.get("illustration_plan"),
         "final_merge": artifact_times.get("draft"),
     }
 

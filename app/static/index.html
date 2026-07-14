@@ -460,6 +460,41 @@
           <button type="button" id="llmTestButton" class="secondary" data-i18n="testConnection">Test connection</button>
           <button type="button" id="llmSaveButton" data-i18n="save">Save</button>
         </div>
+
+        <hr class="modal-divider" />
+
+        <h3 data-i18n="imageSettingsTitle">Image generation</h3>
+        <p class="modal-sub" data-i18n="imageSettingsSub">
+          Optionally add one conceptual illustration under some sections.
+        </p>
+
+        <label>
+          <span data-i18n="provider">Provider</span>
+          <select id="imageProvider" aria-label="Image provider"></select>
+        </label>
+
+        <label id="imageBaseUrlRow">
+          <span data-i18n="baseUrl">Base URL</span>
+          <input id="imageBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
+        </label>
+
+        <label id="imageApiKeyRow">
+          <span data-i18n="apiKey">API Key</span>
+          <input id="imageApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+        </label>
+
+        <label id="imageModelRow">
+          <span data-i18n="model">Model</span>
+          <input id="imageModel" type="text" placeholder="gpt-image-1" />
+        </label>
+
+        <p id="imageProviderNote" class="modal-note"></p>
+        <p id="imageTestResult" class="modal-result hidden" aria-live="polite"></p>
+
+        <div class="modal-actions">
+          <button type="button" id="imageTestButton" class="secondary" data-i18n="testConnection">Test connection</button>
+          <button type="button" id="imageSaveButton" data-i18n="save">Save</button>
+        </div>
       </form>
     </dialog>
 

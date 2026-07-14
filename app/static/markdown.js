@@ -14,6 +14,10 @@
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
       .replace(
+        /!\[([^\]]*)\]\(((?:https?:\/\/|\/)[^)\s]+)\)/g,
+        '<img src="$2" alt="$1" loading="lazy">',
+      )
+      .replace(
         /\[\[(\d+)\]\]\((https?:\/\/[^)\s]+)\)/g,
         '<a class="citation-link" href="$2" target="_blank" rel="noreferrer" title="$2">[$1]</a>',
       )
