@@ -106,13 +106,20 @@ class Settings:
     image_base_url: str = os.getenv("IMAGE_BASE_URL", "").strip()
     image_model: str = os.getenv("IMAGE_MODEL", "").strip()
     # Hard ceiling on generated images per document; the planner may pick fewer.
+    # Overridden by the UI image_options (max_images) when they are saved.
     image_max_per_doc: int = int(os.getenv("IMAGE_MAX_PER_DOC", "5"))
+    # Runtime toggles for the two image kinds, both overridden by the UI
+    # image_options when saved: a document-level cover image and per-section
+    # body illustrations.
+    image_main_image: bool = _bool_env("IMAGE_MAIN_IMAGE", "false")
+    image_section_images: bool = _bool_env("IMAGE_SECTION_IMAGES", "true")
     image_size: str = os.getenv("IMAGE_SIZE", "1536x1024")
     image_timeout_seconds: int = int(os.getenv("IMAGE_TIMEOUT_SECONDS", "120"))
     # Appended to every generation prompt to keep a consistent, text-free style.
     # Visual style preset for section images: "photo" (photorealistic) or
     # "illustration" (flat vector). Drives both the planner's prompt-writing
     # rules and the style suffix; see _IMAGE_STYLES in services/llm.py.
+    # Overridden by the UI image_options (style) when saved.
     image_style: str = os.getenv("IMAGE_STYLE", "photo").strip().lower()
     # Optional override: replaces the preset's style suffix only, while the
     # planner rules still follow IMAGE_STYLE.

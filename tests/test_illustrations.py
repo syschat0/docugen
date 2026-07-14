@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.db import repositories, session
+from app.schemas.artifacts import ArtifactCreate
+from app.schemas.projects import ProjectCreate
 from app.services import image_gen, image_settings, llm
 
 
@@ -22,11 +24,13 @@ def _sections():
     ]
 
 
-def _with_suffix(monkeypatch, suffix="STYLE", style="photo"):
+def _with_suffix(monkeypatch, suffix="STYLE"):
+    # Only the env suffix override lives on settings now; the style preset is
+    # chosen per call via the ``style`` argument.
     monkeypatch.setattr(
         llm,
         "settings",
-        SimpleNamespace(image_style=style, image_style_suffix=suffix),
+        SimpleNamespace(image_style_suffix=suffix),
     )
 
 
@@ -34,7 +38,7 @@ class TestSelectIllustrationEntries:
     def test_keeps_image_entries_and_appends_style_suffix(self, monkeypatch):
         _with_suffix(monkeypatch)
         parsed = [{"id": 1, "image": True, "prompt": "a scene", "caption": "c", "alt": "a"}]
-        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5, style="photo")
         assert len(result) == 1
         assert result[0]["section_id"] == "1.1"
         assert result[0]["prompt"] == "a scene, STYLE"
@@ -45,7 +49,7 @@ class TestSelectIllustrationEntries:
             {"id": 1, "image": False, "prompt": "x"},
             {"id": 2, "image": True, "prompt": "   "},
         ]
-        assert llm.select_illustration_entries(parsed, _sections(), {}, 5) == []
+        assert llm.select_illustration_entries(parsed, _sections(), {}, 5, style="photo") == []
 
     def test_truncates_to_max_images(self, monkeypatch):
         _with_suffix(monkeypatch)
@@ -54,31 +58,35 @@ class TestSelectIllustrationEntries:
             {"id": 2, "image": True, "prompt": "b"},
             {"id": 3, "image": True, "prompt": "c"},
         ]
-        result = llm.select_illustration_entries(parsed, _sections(), {}, 2)
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 2, style="photo")
         assert len(result) == 2
 
     def test_photo_preset_suffix_when_no_override(self, monkeypatch):
-        _with_suffix(monkeypatch, suffix="", style="photo")
+        _with_suffix(monkeypatch, suffix="")
         parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
-        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5, style="photo")
         assert result[0]["prompt"].startswith("a scene, photorealistic")
 
     def test_illustration_preset_suffix(self, monkeypatch):
-        _with_suffix(monkeypatch, suffix="", style="illustration")
+        _with_suffix(monkeypatch, suffix="")
         parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
-        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        result = llm.select_illustration_entries(
+            parsed, _sections(), {}, 5, style="illustration"
+        )
         assert "flat vector illustration" in result[0]["prompt"]
 
     def test_unknown_style_falls_back_to_photo(self, monkeypatch):
-        _with_suffix(monkeypatch, suffix="", style="watercolor")
+        _with_suffix(monkeypatch, suffix="")
         parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
-        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        result = llm.select_illustration_entries(
+            parsed, _sections(), {}, 5, style="watercolor"
+        )
         assert "photorealistic" in result[0]["prompt"]
 
     def test_suffix_override_beats_preset(self, monkeypatch):
-        _with_suffix(monkeypatch, suffix="OVERRIDE", style="photo")
+        _with_suffix(monkeypatch, suffix="OVERRIDE")
         parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
-        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5, style="photo")
         assert result[0]["prompt"] == "a scene, OVERRIDE"
 
     def test_skips_sections_with_mermaid_or_existing_image(self, monkeypatch):
@@ -91,7 +99,79 @@ class TestSelectIllustrationEntries:
             "1.1": "# Intro\n\n```mermaid\ngraph TD\n```",
             "1.2": "# Concept\n\n![existing](/media/x.png)",
         }
-        assert llm.select_illustration_entries(parsed, _sections(), drafts, 5) == []
+        assert llm.select_illustration_entries(parsed, _sections(), drafts, 5, style="photo") == []
+
+
+class TestSelectMainIllustration:
+    def test_appends_style_suffix(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="")
+        entry = llm.select_main_illustration(
+            {"prompt": "a wide cover", "caption": "cap", "alt": "alt"}, "photo"
+        )
+        assert entry["prompt"].startswith("a wide cover, photorealistic")
+        assert entry["caption"] == "cap"
+        assert entry["alt"] == "alt"
+
+    def test_none_when_not_a_dict(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="")
+        assert llm.select_main_illustration(None, "photo") is None
+
+    def test_none_when_prompt_blank(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="")
+        assert llm.select_main_illustration({"prompt": "   "}, "photo") is None
+
+
+class TestPlanSectionIllustrations:
+    def _capture_json_chat(self, monkeypatch, parsed):
+        seen = {}
+
+        def _fake(system, user):
+            seen["system"] = system
+            seen["user"] = user
+            return parsed, {"tokens": 1}
+
+        monkeypatch.setattr(llm, "_json_chat", _fake)
+        return seen
+
+    def test_include_main_adds_title_and_maps_main(self, monkeypatch):
+        seen = self._capture_json_chat(
+            monkeypatch,
+            {
+                "main": {"prompt": "cover", "caption": "c", "alt": "a"},
+                "illustrations": [{"id": 1, "image": True, "prompt": "p"}],
+            },
+        )
+        illustrations, main, usage = llm.plan_section_illustrations(
+            _sections(),
+            max_images=3,
+            language="English",
+            style="photo",
+            include_main=True,
+            document_title="My Report",
+        )
+        assert "My Report" in seen["user"]
+        assert "main" in seen["user"]
+        assert main == {"prompt": "cover", "caption": "c", "alt": "a"}
+        assert illustrations == [{"id": 1, "image": True, "prompt": "p"}]
+        assert usage == {"tokens": 1}
+
+    def test_exclude_main_has_no_main_shape(self, monkeypatch):
+        seen = self._capture_json_chat(
+            monkeypatch,
+            {"illustrations": [{"id": 1, "image": True, "prompt": "p"}]},
+        )
+        illustrations, main, _ = llm.plan_section_illustrations(
+            _sections(),
+            max_images=3,
+            language="English",
+            style="photo",
+            include_main=False,
+            document_title="My Report",
+        )
+        assert '"main"' not in seen["user"]
+        assert "My Report" not in seen["user"]
+        assert main is None
+        assert illustrations == [{"id": 1, "image": True, "prompt": "p"}]
 
 
 # --- _insert_illustration --------------------------------------------------
@@ -277,8 +357,10 @@ def temp_db(tmp_path, monkeypatch):
     )
     session.init_db()
     image_settings._cache = None
+    image_settings._options_cache = None
     yield
     image_settings._cache = None
+    image_settings._options_cache = None
 
 
 class TestImageSettings:
@@ -386,3 +468,133 @@ class TestIllustrationPlanHasFailures:
 
     def test_empty_content_is_reusable(self):
         assert repositories._illustration_plan_has_failures(None) is False
+
+
+# --- runtime image options ---------------------------------------------------
+
+
+class TestImageOptions:
+    def _env(self, monkeypatch, **overrides):
+        base = {
+            "image_main_image": False,
+            "image_section_images": True,
+            "image_max_per_doc": 5,
+            "image_style": "photo",
+        }
+        base.update(overrides)
+        monkeypatch.setattr(image_settings, "settings", SimpleNamespace(**base))
+
+    def test_env_defaults(self, temp_db, monkeypatch):
+        self._env(monkeypatch)
+        assert image_settings.get_image_options() == {
+            "main_image": False,
+            "section_images": True,
+            "max_images": 5,
+            "style": "photo",
+        }
+
+    def test_env_clamps_and_normalizes(self, temp_db, monkeypatch):
+        self._env(monkeypatch, image_max_per_doc=99, image_style="watercolor")
+        options = image_settings.get_image_options()
+        assert options["max_images"] == 20
+        assert options["style"] == "photo"
+
+    def test_set_and_get_roundtrip_survives_cache_reset(self, temp_db, monkeypatch):
+        self._env(monkeypatch)
+        saved = image_settings.set_image_options(True, False, 8, "illustration")
+        assert saved == {
+            "main_image": True,
+            "section_images": False,
+            "max_images": 8,
+            "style": "illustration",
+        }
+        # A fresh process (cache cleared) still reads the stored options.
+        image_settings._options_cache = None
+        assert image_settings.get_image_options() == saved
+
+    def test_invalid_style_rejected(self):
+        with pytest.raises(image_settings.ImageConfigError):
+            image_settings.resolve_options(False, True, 5, "watercolor")
+
+    def test_invalid_max_images_rejected(self):
+        with pytest.raises(image_settings.ImageConfigError):
+            image_settings.resolve_options(False, True, 99, "photo")
+
+
+# --- usable illustration roles -----------------------------------------------
+
+
+class TestUsableIllustrationRoles:
+    def test_main_excluded_from_sections_and_returned_separately(
+        self, temp_db, tmp_path, monkeypatch
+    ):
+        media = tmp_path / "media"
+        media.mkdir()
+        (media / "main.png").write_bytes(b"MAIN")
+        (media / "sec.png").write_bytes(b"SEC")
+        monkeypatch.setattr(repositories, "settings", SimpleNamespace(media_dir=media))
+
+        project = repositories.create_project(
+            ProjectCreate(title="Doc", initial_request="req")
+        )
+        repositories.create_artifact(
+            project.id,
+            ArtifactCreate(
+                type="illustration_plan",
+                title="Section illustrations",
+                content={
+                    "entries": [
+                        {
+                            "section_id": "",
+                            "role": "main",
+                            "status": "generated",
+                            "file": "main.png",
+                            "url": "/media/main.png",
+                        },
+                        {
+                            "section_id": "1.1",
+                            "role": "section",
+                            "status": "generated",
+                            "file": "sec.png",
+                            "url": "/media/sec.png",
+                        },
+                    ]
+                },
+            ),
+        )
+
+        sections = repositories._usable_illustrations(project.id)
+        assert set(sections) == {"1.1"}
+        main = repositories._usable_main_illustration(project.id)
+        assert main is not None
+        assert main["file"] == "main.png"
+
+    def test_roleless_entry_treated_as_section(self, temp_db, tmp_path, monkeypatch):
+        media = tmp_path / "media"
+        media.mkdir()
+        (media / "legacy.png").write_bytes(b"OLD")
+        monkeypatch.setattr(repositories, "settings", SimpleNamespace(media_dir=media))
+
+        project = repositories.create_project(
+            ProjectCreate(title="Doc", initial_request="req")
+        )
+        repositories.create_artifact(
+            project.id,
+            ArtifactCreate(
+                type="illustration_plan",
+                title="Section illustrations",
+                content={
+                    "entries": [
+                        {
+                            "section_id": "2.1",
+                            "status": "generated",
+                            "file": "legacy.png",
+                            "url": "/media/legacy.png",
+                        }
+                    ]
+                },
+            ),
+        )
+
+        assert set(repositories._usable_illustrations(project.id)) == {"2.1"}
+        assert repositories._usable_main_illustration(project.id) is None

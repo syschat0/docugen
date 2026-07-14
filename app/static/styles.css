@@ -253,6 +253,29 @@ label {
   font-weight: 700;
 }
 
+/* Checkbox rows: the global label grid and full-width input styling would
+ * stack a stretched checkbox above its text. */
+label.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+label.check-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--blue);
+}
+
+/* Grouped option rows sit inside one form-stack cell, so restate its gap. */
+#imageOptionsRows {
+  display: grid;
+  gap: 12px;
+}
+
 .app-shell {
   min-height: 100vh;
 }

@@ -17,6 +17,8 @@ from typing import Any, Dict, Optional
 from app.core.config import settings
 
 _SETTING_KEY = "image_provider"
+_OPTIONS_KEY = "image_options"
+_STYLES = ("photo", "illustration")
 
 # Preset providers surfaced in the UI. ``base_url_editable`` / ``model_editable``
 # / ``needs_api_key`` drive which fields the frontend shows for each preset.
@@ -84,6 +86,9 @@ _PROVIDERS_BY_ID = {preset["id"]: preset for preset in PROVIDERS}
 # Process-local cache; a run generates several images, so avoid a DB read each
 # time. Invalidated on every write via set_active_image_config().
 _cache: Optional[Dict[str, str]] = None
+# Process-local cache for the runtime image options, invalidated on write via
+# set_image_options().
+_options_cache: Optional[Dict[str, Any]] = None
 
 
 class ImageConfigError(ValueError):
@@ -146,6 +151,99 @@ def image_generation_enabled() -> bool:
     if preset["needs_api_key"] and not config.get("api_key"):
         return False
     return True
+
+
+def _env_options() -> Dict[str, Any]:
+    """Runtime image options from the env defaults in :data:`settings`."""
+    style = settings.image_style if settings.image_style in _STYLES else "photo"
+    return {
+        "main_image": settings.image_main_image,
+        "section_images": settings.image_section_images,
+        "max_images": max(0, min(20, settings.image_max_per_doc)),
+        "style": style,
+    }
+
+
+def get_image_options() -> Dict[str, Any]:
+    """Runtime image options, from the DB if set, else the env defaults.
+
+    Cover-image / section-image toggles, the per-document cap, and the style
+    preset are chosen from the UI and persisted in ``app_settings``; when
+    nothing is stored the env values apply. Stored values are coerced field by
+    field so a stale or hand-edited row can never crash the pipeline.
+    """
+    global _options_cache
+    if _options_cache is not None:
+        return _options_cache
+
+    # Lazy import to avoid an import cycle (repositories -> ... -> image_settings).
+    from app.db.repositories import get_app_setting
+
+    env = _env_options()
+    stored = get_app_setting(_OPTIONS_KEY)
+    if stored:
+        try:
+            max_images = int(stored.get("max_images"))
+        except (TypeError, ValueError):
+            max_images = env["max_images"]
+        if max_images < 0 or max_images > 20:
+            max_images = env["max_images"]
+        style = stored.get("style")
+        if style not in _STYLES:
+            style = env["style"]
+        options = {
+            "main_image": bool(stored.get("main_image")),
+            "section_images": bool(stored.get("section_images")),
+            "max_images": max_images,
+            "style": style,
+        }
+    else:
+        options = env
+    _options_cache = options
+    return options
+
+
+def resolve_options(
+    main_image: Any,
+    section_images: Any,
+    max_images: Any,
+    style: Any,
+) -> Dict[str, Any]:
+    """Validate + normalize runtime image options for the API path.
+
+    Stricter than :func:`get_image_options`: an out-of-range or non-integer
+    ``max_images`` or an unknown ``style`` raises ImageConfigError instead of
+    falling back, so a bad UI submission is rejected.
+    """
+    if isinstance(max_images, bool) or not isinstance(max_images, int):
+        raise ImageConfigError("max_images must be an integer")
+    if max_images < 0 or max_images > 20:
+        raise ImageConfigError("max_images must be between 0 and 20")
+    if style not in _STYLES:
+        raise ImageConfigError(f"Unknown image style '{style}'")
+    return {
+        "main_image": bool(main_image),
+        "section_images": bool(section_images),
+        "max_images": max_images,
+        "style": style,
+    }
+
+
+def set_image_options(
+    main_image: Any,
+    section_images: Any,
+    max_images: Any,
+    style: Any,
+) -> Dict[str, Any]:
+    """Validate, persist, and activate the runtime image options."""
+    global _options_cache
+    options = resolve_options(main_image, section_images, max_images, style)
+
+    from app.db.repositories import set_app_setting
+
+    set_app_setting(_OPTIONS_KEY, options)
+    _options_cache = options
+    return options
 
 
 def _clean(value: Any) -> str:

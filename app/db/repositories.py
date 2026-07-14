@@ -48,6 +48,7 @@ from app.services.llm import (
     plan_section_illustrations,
     plan_user_questions,
     select_illustration_entries,
+    select_main_illustration,
     repair_section_evidence,
     repair_sentence_quality_sections,
     review_continuity_staged,
@@ -70,6 +71,7 @@ from app.services.search import (
 from app.services.image_gen import ImageGenError, generate_section_image
 from app.services.image_settings import (
     get_active_image_config,
+    get_image_options,
     image_generation_enabled,
 )
 from app.services.source_eval import evaluate_sources, rank_sources_for_section
@@ -2588,19 +2590,19 @@ class FinalMergeInputs:
     citation_style: str
 
 
-def _usable_illustrations(project_id: str) -> Dict[str, Dict[str, Any]]:
-    """Map section_id -> illustration entry for images that exist on disk.
+def _usable_illustration_entries(project_id: str) -> list[Dict[str, Any]]:
+    """All illustration entries whose generated image exists on disk.
 
-    Best effort: any read problem (no plan, no table) yields no illustrations so
-    the merge always succeeds. Only successfully generated/cached files are used.
+    Best effort: any read problem (no plan, no table) yields no entries so the
+    merge always succeeds. Only successfully generated/cached files are kept.
     """
     try:
         artifact = _latest_artifact(project_id, "illustration_plan")
     except Exception:
-        return {}
+        return []
     if artifact is None or not artifact.content:
-        return {}
-    result: Dict[str, Dict[str, Any]] = {}
+        return []
+    usable: list[Dict[str, Any]] = []
     for entry in artifact.content.get("entries") or []:
         if not isinstance(entry, dict):
             continue
@@ -2609,10 +2611,32 @@ def _usable_illustrations(project_id: str) -> Dict[str, Dict[str, Any]]:
         file_name = str(entry.get("file") or "")
         if not file_name or not (settings.media_dir / file_name).exists():
             continue
+        usable.append(entry)
+    return usable
+
+
+def _usable_illustrations(project_id: str) -> Dict[str, Dict[str, Any]]:
+    """Map section_id -> illustration entry for body images that exist on disk.
+
+    Excludes the cover ("main") image; an entry with no role is treated as a
+    section image for backward compatibility with pre-cover-image artifacts.
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+    for entry in _usable_illustration_entries(project_id):
+        if entry.get("role") == "main":
+            continue
         section_id = str(entry.get("section_id") or "")
         if section_id:
             result[section_id] = entry
     return result
+
+
+def _usable_main_illustration(project_id: str) -> Dict[str, Any] | None:
+    """The first usable cover ("main") illustration, or None."""
+    for entry in _usable_illustration_entries(project_id):
+        if entry.get("role") == "main":
+            return entry
+    return None
 
 
 def _apply_section_illustration(
@@ -2686,6 +2710,11 @@ def _build_final_draft_content(
         accessed_at=inputs.research_cutoff,
         profile=inputs.profile,
     )
+    # The merged draft starts with "# {title}", so the cover image lands right
+    # under the document title.
+    main_entry = _usable_main_illustration(inputs.project_id)
+    if main_entry:
+        final_markdown = _insert_illustration(final_markdown, main_entry)
     quality_summary = build_quality_summary(
         project_text=f"{inputs.project.title}\n{inputs.project.initial_request}",
         sources=used_sources,
@@ -4792,14 +4821,19 @@ def _run_targeted_revision_stage(
     )
 
 
-def _illustration_conditions(config: Dict[str, str]) -> Dict[str, Any]:
+def _illustration_conditions(
+    config: Dict[str, str], options: Dict[str, Any]
+) -> Dict[str, Any]:
     return {
         "provider": config.get("provider"),
         "model": config.get("model"),
         "size": settings.image_size,
-        "max_images": settings.image_max_per_doc,
+        "max_images": options["max_images"],
         # A style change must re-plan and re-generate, not reuse a cached plan.
-        "style": settings.image_style,
+        "style": options["style"],
+        # Toggling either image kind changes the plan, so both invalidate reuse.
+        "main_image": options["main_image"],
+        "section_images": options["section_images"],
         "style_suffix": settings.image_style_suffix,
     }
 
@@ -4845,8 +4879,21 @@ def _run_illustration_stage(
         )
         return IllustrationStageResult(illustration_time=revision_time, artifact_ids=[])
 
+    options = get_image_options()
+    section_cap = options["max_images"] if options["section_images"] else 0
+    if not options["main_image"] and section_cap <= 0:
+        # A provider is configured but every image kind is turned off, so there
+        # is nothing to generate; complete as a skipped reuse run like disabled.
+        _complete_reuse_run(
+            project_id,
+            agent_name,
+            "illustration",
+            {"skipped": True, "reason": "no_image_targets"},
+        )
+        return IllustrationStageResult(illustration_time=revision_time, artifact_ids=[])
+
     config = get_active_image_config()
-    conditions = _illustration_conditions(config)
+    conditions = _illustration_conditions(config, options)
 
     existing = _latest_artifact(project_id, "illustration_plan")
     # A plan with failures is never reused: failed API calls were not billed,
@@ -4902,28 +4949,47 @@ def _run_illustration_stage(
     entries: list[Dict[str, Any]] = []
     plan_error: str | None = None
     usage = None
+    main_item: Dict[str, Any] | None = None
     if planner_sections and settings.llm_enabled:
         try:
-            parsed, usage = plan_section_illustrations(
+            parsed, parsed_main, usage = plan_section_illustrations(
                 planner_sections,
-                max_images=settings.image_max_per_doc,
+                max_images=section_cap,
                 language=_document_language(project),
+                style=options["style"],
+                include_main=options["main_image"],
+                document_title=project.title,
             )
             selected = select_illustration_entries(
                 parsed,
                 planner_sections,
                 drafts_markdown_by_section_id,
-                settings.image_max_per_doc,
+                section_cap,
+                style=options["style"],
+            )
+            main_item = (
+                select_main_illustration(parsed_main, options["style"])
+                if options["main_image"]
+                else None
             )
         except LLMError as exc:
             # A failed plan must not fail the run; record it and produce no images.
             plan_error = str(exc)
             selected = []
+            main_item = None
     else:
         selected = []
 
-    generated = cached = failed = 0
+    # The cover image (if any) generates first, then the per-section images. Both
+    # kinds share one loop; the entry's "role" tells the merge where each goes.
+    targets: list[Dict[str, Any]] = []
+    if main_item:
+        targets.append({"section_id": "", "role": "main", **main_item})
     for item in selected:
+        targets.append({"role": "section", **item})
+
+    generated = cached = failed = 0
+    for item in targets:
         if is_cancel_requested(project_id):
             raise WorkflowCancelledError()
         prompt = item["prompt"]
@@ -4931,6 +4997,7 @@ def _run_illustration_stage(
         pre_existing = path.exists()
         entry: Dict[str, Any] = {
             "section_id": item["section_id"],
+            "role": item["role"],
             "prompt": prompt,
             "caption": item["caption"],
             "alt": item["alt"],

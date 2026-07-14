@@ -202,8 +202,14 @@ const translations = {
     llmTestOk: "Connected. Model: {model}",
     llmTestFail: "Failed: {error}",
     imageSettingsTitle: "Image generation",
-    imageSettingsSub: "Optionally add one conceptual illustration under some sections.",
+    imageSettingsSub: "Generate a cover image and per-section illustrations.",
     imageSaved: "Image provider saved.",
+    imageMainToggle: "Cover image below the document title",
+    imageSectionToggle: "Section images in the body",
+    imageMaxCount: "Max body images",
+    imageStyleLabel: "Image style",
+    imageStylePhoto: "Photo (realistic)",
+    imageStyleIllustration: "Flat illustration",
     rendered: "Rendered",
     reranFrom: "Reran from {phase}.",
     rerunConfirm: "Rerun from {phase}? Downstream artifacts will be regenerated.",
@@ -576,8 +582,14 @@ const translations = {
     llmTestOk: "연결 성공. 모델: {model}",
     llmTestFail: "실패: {error}",
     imageSettingsTitle: "이미지 생성",
-    imageSettingsSub: "일부 섹션 아래에 개념 일러스트를 한 장씩 추가할 수 있습니다.",
+    imageSettingsSub: "메인(커버) 이미지와 섹션별 본문 이미지를 생성해 문서에 삽입합니다.",
     imageSaved: "이미지 프로바이더를 저장했습니다.",
+    imageMainToggle: "문서 제목 아래 메인(커버) 이미지",
+    imageSectionToggle: "본문 섹션 이미지",
+    imageMaxCount: "본문 이미지 최대 매수",
+    imageStyleLabel: "이미지 스타일",
+    imageStylePhoto: "사진(실사)",
+    imageStyleIllustration: "플랫 일러스트",
     rendered: "서식 보기",
     reranFrom: "{phase} 단계부터 다시 실행했습니다.",
     rerunConfirm: "{phase} 단계부터 다시 실행할까요? 이후 산출물은 다시 생성됩니다.",
@@ -798,6 +810,11 @@ const els = {
   imageApiKey: document.querySelector("#imageApiKey"),
   imageModelRow: document.querySelector("#imageModelRow"),
   imageModel: document.querySelector("#imageModel"),
+  imageOptionsRows: document.querySelector("#imageOptionsRows"),
+  imageMainToggle: document.querySelector("#imageMainToggle"),
+  imageSectionToggle: document.querySelector("#imageSectionToggle"),
+  imageMaxCount: document.querySelector("#imageMaxCount"),
+  imageStyle: document.querySelector("#imageStyle"),
   imageProviderNote: document.querySelector("#imageProviderNote"),
   imageTestResult: document.querySelector("#imageTestResult"),
   imageTestButton: document.querySelector("#imageTestButton"),
@@ -805,7 +822,7 @@ const els = {
 };
 
 const llmSettingsState = { providers: [], active: null, loaded: false };
-const imageSettingsState = { providers: [], active: null, loaded: false };
+const imageSettingsState = { providers: [], active: null, options: null, loaded: false };
 
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
@@ -4088,6 +4105,7 @@ function renderImageProviderFields() {
   els.imageBaseUrlRow.classList.toggle("hidden", !preset.base_url_editable);
   els.imageApiKeyRow.classList.toggle("hidden", !preset.needs_api_key);
   els.imageModelRow.classList.toggle("hidden", !preset.model_editable);
+  els.imageOptionsRows.classList.toggle("hidden", preset.id === "disabled");
   els.imageProviderNote.textContent = providerNote(preset);
   els.imageTestResult.classList.add("hidden");
 }
@@ -4106,15 +4124,26 @@ function fillImageFormForProvider(providerId) {
   renderImageProviderFields();
 }
 
+function fillImageOptions() {
+  const options = imageSettingsState.options;
+  if (!options) return;
+  els.imageMainToggle.checked = Boolean(options.main_image);
+  els.imageSectionToggle.checked = Boolean(options.section_images);
+  els.imageMaxCount.value = options.max_images;
+  els.imageStyle.value = options.style;
+}
+
 async function loadImageSettings() {
   const data = await api("/settings/image");
   imageSettingsState.providers = data.providers || [];
   imageSettingsState.active = data.active || null;
+  imageSettingsState.options = data.options || null;
   imageSettingsState.loaded = true;
   populateImageProviderSelect();
   fillImageFormForProvider(
     imageSettingsState.active?.provider || imageSettingsState.providers[0]?.id,
   );
+  fillImageOptions();
 }
 
 function collectImageForm() {
@@ -4124,6 +4153,15 @@ function collectImageForm() {
   if (preset?.model_editable) payload.model = els.imageModel.value.trim();
   const key = els.imageApiKey.value.trim();
   payload.api_key = key ? key : null;
+  let maxImages = Number.parseInt(els.imageMaxCount.value, 10);
+  if (Number.isNaN(maxImages)) maxImages = 5;
+  maxImages = Math.max(0, Math.min(20, maxImages));
+  payload.options = {
+    main_image: els.imageMainToggle.checked,
+    section_images: els.imageSectionToggle.checked,
+    max_images: maxImages,
+    style: els.imageStyle.value,
+  };
   return payload;
 }
 

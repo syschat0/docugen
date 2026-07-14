@@ -12,8 +12,10 @@ from app.services.image_settings import (
     PROVIDERS as IMAGE_PROVIDERS,
     ImageConfigError,
     get_active_image_config,
+    get_image_options,
     public_config as image_public_config,
     set_active_image_config,
+    set_image_options,
     test_image_config,
 )
 from app.services.llm_settings import (
@@ -60,6 +62,7 @@ def get_image_settings() -> ImageConfigRead:
     return ImageConfigRead(
         active=image_public_config(get_active_image_config()),
         providers=IMAGE_PROVIDERS,
+        options=get_image_options(),
     )
 
 
@@ -69,9 +72,20 @@ def update_image_settings(payload: ImageConfigUpdate) -> ImageConfigRead:
         config = set_active_image_config(
             payload.provider, payload.base_url, payload.api_key, payload.model
         )
+        if payload.options is not None:
+            set_image_options(
+                payload.options.main_image,
+                payload.options.section_images,
+                payload.options.max_images,
+                payload.options.style,
+            )
     except ImageConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ImageConfigRead(active=image_public_config(config), providers=IMAGE_PROVIDERS)
+    return ImageConfigRead(
+        active=image_public_config(config),
+        providers=IMAGE_PROVIDERS,
+        options=get_image_options(),
+    )
 
 
 @router.post("/image/test", response_model=ImageTestResult)
