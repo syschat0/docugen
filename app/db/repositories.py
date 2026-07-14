@@ -4769,6 +4769,9 @@ def _illustration_conditions(config: Dict[str, str]) -> Dict[str, Any]:
         "model": config.get("model"),
         "size": settings.image_size,
         "max_images": settings.image_max_per_doc,
+        # A style change must re-plan and re-generate, not reuse a cached plan.
+        "style": settings.image_style,
+        "style_suffix": settings.image_style_suffix,
     }
 
 

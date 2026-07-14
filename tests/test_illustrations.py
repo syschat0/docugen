@@ -22,8 +22,12 @@ def _sections():
     ]
 
 
-def _with_suffix(monkeypatch, suffix="STYLE"):
-    monkeypatch.setattr(llm, "settings", SimpleNamespace(image_style_suffix=suffix))
+def _with_suffix(monkeypatch, suffix="STYLE", style="photo"):
+    monkeypatch.setattr(
+        llm,
+        "settings",
+        SimpleNamespace(image_style=style, image_style_suffix=suffix),
+    )
 
 
 class TestSelectIllustrationEntries:
@@ -52,6 +56,30 @@ class TestSelectIllustrationEntries:
         ]
         result = llm.select_illustration_entries(parsed, _sections(), {}, 2)
         assert len(result) == 2
+
+    def test_photo_preset_suffix_when_no_override(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="", style="photo")
+        parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        assert result[0]["prompt"].startswith("a scene, photorealistic")
+
+    def test_illustration_preset_suffix(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="", style="illustration")
+        parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        assert "flat vector illustration" in result[0]["prompt"]
+
+    def test_unknown_style_falls_back_to_photo(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="", style="watercolor")
+        parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        assert "photorealistic" in result[0]["prompt"]
+
+    def test_suffix_override_beats_preset(self, monkeypatch):
+        _with_suffix(monkeypatch, suffix="OVERRIDE", style="photo")
+        parsed = [{"id": 1, "image": True, "prompt": "a scene"}]
+        result = llm.select_illustration_entries(parsed, _sections(), {}, 5)
+        assert result[0]["prompt"] == "a scene, OVERRIDE"
 
     def test_skips_sections_with_mermaid_or_existing_image(self, monkeypatch):
         _with_suffix(monkeypatch)

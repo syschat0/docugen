@@ -110,10 +110,13 @@ class Settings:
     image_size: str = os.getenv("IMAGE_SIZE", "1536x1024")
     image_timeout_seconds: int = int(os.getenv("IMAGE_TIMEOUT_SECONDS", "120"))
     # Appended to every generation prompt to keep a consistent, text-free style.
-    image_style_suffix: str = os.getenv(
-        "IMAGE_STYLE_SUFFIX",
-        "clean flat vector illustration, soft muted colors, no text or lettering",
-    )
+    # Visual style preset for section images: "photo" (photorealistic) or
+    # "illustration" (flat vector). Drives both the planner's prompt-writing
+    # rules and the style suffix; see _IMAGE_STYLES in services/llm.py.
+    image_style: str = os.getenv("IMAGE_STYLE", "photo").strip().lower()
+    # Optional override: replaces the preset's style suffix only, while the
+    # planner rules still follow IMAGE_STYLE.
+    image_style_suffix: str = os.getenv("IMAGE_STYLE_SUFFIX", "")
     # Generated PNGs are cached here by prompt hash so re-runs never re-bill.
     media_dir: Path = Path(os.getenv("MEDIA_DIR", "data/media"))
 
