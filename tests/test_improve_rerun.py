@@ -94,6 +94,55 @@ class TestImproveRerunInvalidation:
         assert repositories._list_section_summaries(project.id)
 
 
+def _draft_version(project_id: str, title: str, when: str) -> str:
+    artifact = repositories.create_artifact(
+        project_id, ArtifactCreate(type="section_draft", title=title, content={})
+    )
+    with session.get_connection() as conn:
+        conn.execute(
+            "UPDATE artifacts SET created_at = ?, updated_at = ? WHERE id = ?",
+            (when, when, artifact.id),
+        )
+    return artifact.id
+
+
+class TestReviewInputTime:
+    """Reviews must not go stale from the revision they themselves triggered.
+
+    Targeted revision persists revised drafts after the reviews run, so
+    comparing review freshness against the newest draft made every later
+    run re-run the whole review chain regardless of the forced stage.
+    """
+
+    def test_ignores_targeted_revision_versions(self, temp_db):
+        project = _project()
+        _draft_version(project.id, "Section 1.1: draft", "2026-01-01T00:00:01+00:00")
+        _draft_version(
+            project.id, "Section 1.1: targeted revision", "2026-01-01T00:00:03+00:00"
+        )
+        # A review written between the original draft and the revision it
+        # triggered still counts as having seen everything it needed to.
+        assert (
+            repositories._review_input_time(project.id, "fallback")
+            == "2026-01-01T00:00:01+00:00"
+        )
+
+    def test_counts_feedback_versions(self, temp_db):
+        project = _project()
+        _draft_version(project.id, "Section 1.1: draft", "2026-01-01T00:00:01+00:00")
+        _draft_version(
+            project.id, "Section 1.1: feedback applied", "2026-01-01T00:00:05+00:00"
+        )
+        assert (
+            repositories._review_input_time(project.id, "fallback")
+            == "2026-01-01T00:00:05+00:00"
+        )
+
+    def test_falls_back_without_drafts(self, temp_db):
+        project = _project()
+        assert repositories._review_input_time(project.id, "FALLBACK") == "FALLBACK"
+
+
 # Snapshot of the invalidation graph derived from each stage's declared primary
 # artifact type. Pins the derivation so a stage-order edit that shifts the tail
 # is caught here instead of silently changing what a forced rerun clears.

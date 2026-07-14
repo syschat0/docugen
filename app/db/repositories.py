@@ -4457,6 +4457,32 @@ def _run_feedback_revision_stage(
     )
 
 
+_TARGETED_REVISION_TITLE = "targeted revision"
+
+
+def _review_input_time(project_id: str, section_work_time: str) -> str:
+    """Newest section-draft change the reviews are required to have seen.
+
+    Draft versions persisted by the targeted-revision stage do not count: the
+    reviews that triggered that revision had already covered everything else,
+    so counting them would mark the reviews stale right after their own
+    revision ran and re-run the whole review chain on every later workflow
+    run, whatever stage the user forced.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(COALESCE(updated_at, created_at)) AS latest
+            FROM artifacts
+            WHERE project_id = ? AND type = 'section_draft'
+              AND title NOT LIKE ?
+            """,
+            (project_id, f"%{_TARGETED_REVISION_TITLE}"),
+        ).fetchone()
+    latest = row["latest"] if row else None
+    return latest or section_work_time
+
+
 def _run_document_review_stage(
     project_id: str,
     project: ProjectRead,
@@ -4471,7 +4497,8 @@ def _run_document_review_stage(
     artifact_ids: list[str] = []
     continuity_artifact = _latest_artifact(project_id, "continuity_review")
     if continuity_artifact is not None and _is_fresh(
-        continuity_artifact.updated_at, section_work_time
+        continuity_artifact.updated_at,
+        _review_input_time(project_id, section_work_time),
     ):
         continuity = continuity_artifact.content or {}
         artifact_ids.append(continuity_artifact.id)
@@ -4710,7 +4737,9 @@ def _run_targeted_revision_stage(
         persisted_artifact_ids.append(
             _persist_revised_section_draft(
                 project_id, updated, str(updated.get("markdown") or ""),
-                f"Section {section_id}: targeted revision", agent_name,
+                # _review_input_time matches on this title to exclude these
+                # versions from review staleness; keep the two in sync.
+                f"Section {section_id}: {_TARGETED_REVISION_TITLE}", agent_name,
             )
         )
         revised_ids.append(section_id)
