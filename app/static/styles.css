@@ -1908,6 +1908,57 @@ button.status-pill:disabled {
   margin: 4px 0 0;
 }
 
+.illustration-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.illustration-card {
+  margin: 0;
+  border: var(--border-thin);
+  background: var(--surface);
+  box-shadow: var(--shadow-small);
+  overflow: hidden;
+}
+
+.illustration-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+}
+
+.illustration-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 3 / 2;
+  background: var(--danger-soft);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.illustration-card figcaption {
+  padding: 7px;
+  font-size: 12px;
+}
+
+.illustration-card.failed figcaption {
+  background: var(--danger-soft);
+}
+
+.illustration-error {
+  color: var(--danger);
+}
+
+.illustration-prompt summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
 .source-list {
   margin: 4px 0 0;
   padding-left: 18px;

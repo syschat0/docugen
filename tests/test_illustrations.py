@@ -2,6 +2,7 @@
 
 import base64
 import io
+import json
 import urllib.error
 from types import SimpleNamespace
 
@@ -598,3 +599,83 @@ class TestUsableIllustrationRoles:
 
         assert set(repositories._usable_illustrations(project.id)) == {"2.1"}
         assert repositories._usable_main_illustration(project.id) is None
+
+
+# --- illustration step details -----------------------------------------------
+
+
+class TestIllustrationStepDetails:
+    def _details(self, entries, *, plan_error=None, output=None):
+        row = {"output_json": json.dumps(output or {})}
+        artifacts_by_type = {
+            "illustration_plan": [{"content": {"entries": entries, "error": plan_error}}]
+        }
+        return repositories._workflow_step_details(
+            "illustration", row, artifacts_by_type, []
+        )
+
+    def test_generated_entry_carries_url_role_and_full_prompt(self):
+        long_prompt = "p" * 250
+        details = self._details(
+            [
+                {
+                    "section_id": "1.1",
+                    "role": "section",
+                    "caption": "A caption",
+                    "status": "generated",
+                    "url": "/media/a.png",
+                    "prompt": long_prompt,
+                    "error": None,
+                }
+            ]
+        )
+        image = details["images"][0]
+        assert image["url"] == "/media/a.png"
+        assert image["role"] == "section"
+        assert image["prompt"] == long_prompt
+
+    def test_failed_entry_drops_url_and_keeps_error(self):
+        details = self._details(
+            [
+                {
+                    "section_id": "1.2",
+                    "role": "section",
+                    "caption": "c",
+                    "status": "failed",
+                    "url": "/media/b.png",
+                    "prompt": "prompt",
+                    "error": "boom",
+                }
+            ]
+        )
+        image = details["images"][0]
+        assert image["url"] is None
+        assert image["error"] == "boom"
+
+    def test_images_are_not_capped(self):
+        entries = [
+            {"section_id": f"1.{i}", "role": "section", "status": "generated"}
+            for i in range(10)
+        ]
+        details = self._details(entries)
+        assert len(details["images"]) == 10
+
+    def test_skipped_output_promotes_reason(self):
+        details = self._details(
+            [], output={"reused": True, "skipped": True, "reason": "disabled"}
+        )
+        assert details["skipped_reason"] == "disabled"
+
+    def test_counts_reflect_statuses(self):
+        details = self._details(
+            [
+                {"status": "generated"},
+                {"status": "generated"},
+                {"status": "cached"},
+                {"status": "failed"},
+            ]
+        )
+        assert details["image_count"] == 4
+        assert details["generated_count"] == 2
+        assert details["cached_count"] == 1
+        assert details["failed_count"] == 1

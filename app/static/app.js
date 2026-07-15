@@ -305,6 +305,18 @@ const translations = {
     fromChapterResearch: "chapter research",
     chapterDigests: "Chapter digests",
     glossary: "Glossary",
+    imagesPlanned: "Planned images",
+    imagesGenerated: "Generated",
+    imagesCached: "Cached (reused)",
+    imagesFailed: "Failed",
+    plannerError: "Planner error",
+    imagePrompt: "Prompt",
+    coverBadge: "Cover",
+    imageStatusGenerated: "Generated",
+    imageStatusCached: "Cached",
+    imageStatusFailed: "Failed",
+    illustrationSkippedDisabled: "Skipped — image generation is disabled.",
+    illustrationSkippedNoTargets: "Skipped — cover and section images are both turned off.",
     smoothedSeams: "Smoothed transitions",
     started: "started",
     startWriting: "Start Writing",
@@ -610,6 +622,18 @@ const translations = {
     fromChapterResearch: "챕터 조사",
     chapterDigests: "챕터 다이제스트",
     glossary: "용어집",
+    imagesPlanned: "계획된 이미지",
+    imagesGenerated: "생성",
+    imagesCached: "캐시 재사용",
+    imagesFailed: "실패",
+    plannerError: "플래너 오류",
+    imagePrompt: "프롬프트",
+    coverBadge: "커버",
+    imageStatusGenerated: "생성됨",
+    imageStatusCached: "캐시",
+    imageStatusFailed: "실패",
+    illustrationSkippedDisabled: "이미지 생성이 비활성화되어 건너뛰었습니다.",
+    illustrationSkippedNoTargets: "커버·본문 이미지가 모두 꺼져 있어 건너뛰었습니다.",
     smoothedSeams: "다듬은 전환부",
     started: "시작",
     startWriting: "작성 시작",
@@ -2268,6 +2292,53 @@ function renderStepDetails(step) {
         ]),
         details.draft_preview ? `<pre class="mini-preview">${escapeHtml(details.draft_preview)}</pre>` : "",
       ].join("");
+    case "illustration": {
+      if (details.skipped_reason) {
+        const reasonText =
+          details.skipped_reason === "disabled"
+            ? t("illustrationSkippedDisabled")
+            : t("illustrationSkippedNoTargets");
+        return `<p class="item-meta">${escapeHtml(reasonText)}</p>`;
+      }
+      const statusLabelFor = (status) => {
+        if (status === "generated") return t("imageStatusGenerated");
+        if (status === "cached") return t("imageStatusCached");
+        if (status === "failed") return t("imageStatusFailed");
+        return status || "";
+      };
+      const cards = (details.images || [])
+        .map((image) => {
+          const failed = image.status === "failed";
+          const thumb = image.url
+            ? `<a href="${escapeHtml(image.url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(image.url)}" loading="lazy" alt="${escapeHtml(image.caption || "")}"></a>`
+            : `<div class="illustration-placeholder">✕</div>`;
+          const badge = image.role === "main" ? t("coverBadge") : image.section_id || "";
+          const meta = [badge, statusLabelFor(image.status)]
+            .filter(Boolean)
+            .map(escapeHtml)
+            .join(" · ");
+          return `<figure class="illustration-card${failed ? " failed" : ""}">
+            ${thumb}
+            <figcaption>
+              <p class="item-meta">${meta}</p>
+              ${image.caption ? `<p>${escapeHtml(image.caption)}</p>` : ""}
+              ${image.error ? `<p class="illustration-error">${escapeHtml(image.error)}</p>` : ""}
+              ${image.prompt ? `<details class="illustration-prompt"><summary>${escapeHtml(t("imagePrompt"))}</summary><p>${escapeHtml(image.prompt)}</p></details>` : ""}
+            </figcaption>
+          </figure>`;
+        })
+        .join("");
+      return [
+        renderKeyValueList([
+          [t("imagesPlanned"), details.image_count],
+          [t("imagesGenerated"), details.generated_count],
+          [t("imagesCached"), details.cached_count],
+          [t("imagesFailed"), details.failed_count],
+          [t("plannerError"), details.error],
+        ]),
+        cards ? `<div class="illustration-grid">${cards}</div>` : "",
+      ].join("");
+    }
     default:
       return details.output ? `<pre class="mini-preview">${escapeHtml(JSON.stringify(details.output, null, 2))}</pre>` : step.phase;
   }

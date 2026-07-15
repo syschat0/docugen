@@ -4989,7 +4989,8 @@ def _run_illustration_stage(
         targets.append({"role": "section", **item})
 
     generated = cached = failed = 0
-    for item in targets:
+    set_stage_progress(project_id, "illustration", 0, len(targets))
+    for index, item in enumerate(targets):
         if is_cancel_requested(project_id):
             raise WorkflowCancelledError()
         prompt = item["prompt"]
@@ -5018,6 +5019,7 @@ def _run_illustration_stage(
             else:
                 generated += 1
         entries.append(entry)
+        set_stage_progress(project_id, "illustration", index + 1, len(targets))
 
     content = {
         "entries": entries,
@@ -5643,6 +5645,8 @@ def _workflow_step_details(
             revision.get("revised_section_ids") or revision.get("sections") or []
         )
     elif phase == "illustration":
+        if output.get("skipped"):
+            details["skipped_reason"] = output.get("reason")
         plan = (artifacts_by_type.get("illustration_plan") or [{}])[-1].get("content") or {}
         entries = plan.get("entries") or []
         details["image_count"] = len(entries)
@@ -5659,10 +5663,15 @@ def _workflow_step_details(
         details["images"] = [
             {
                 "section_id": e.get("section_id"),
+                "role": e.get("role"),
                 "caption": _short_text(e.get("caption", ""), 120),
                 "status": e.get("status"),
+                # A failed entry has no file on disk, so there is nothing to thumbnail.
+                "url": e.get("url") if e.get("status") != "failed" else None,
+                "prompt": e.get("prompt") or "",
+                "error": _short_text(e.get("error") or "", 200) or None,
             }
-            for e in entries[:8]
+            for e in entries
             if isinstance(e, dict)
         ]
     elif phase == "final_merge":
