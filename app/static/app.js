@@ -194,6 +194,7 @@ const translations = {
     provider: "Provider",
     baseUrl: "Base URL",
     apiKey: "API Key",
+    apiKeyOptional: "sk-... (optional)",
     model: "Model",
     testConnection: "Test connection",
     save: "Save",
@@ -586,6 +587,7 @@ const translations = {
     provider: "프로바이더",
     baseUrl: "Base URL",
     apiKey: "API 키",
+    apiKeyOptional: "sk-... (선택)",
     model: "모델",
     testConnection: "연결 테스트",
     save: "저장",
@@ -4060,7 +4062,7 @@ function renderLlmProviderFields() {
   const preset = currentLlmProviderMeta();
   if (!preset) return;
   els.llmBaseUrlRow.classList.toggle("hidden", !preset.base_url_editable);
-  els.llmApiKeyRow.classList.toggle("hidden", !preset.needs_api_key);
+  els.llmApiKeyRow.classList.toggle("hidden", !preset.api_key_editable);
   els.llmModelRow.classList.toggle("hidden", !preset.model_editable);
   els.llmProviderNote.textContent = providerNote(preset);
   els.llmTestResult.classList.add("hidden");
@@ -4076,7 +4078,11 @@ function fillLlmFormForProvider(providerId) {
   els.llmModel.value = isActive ? active.model : preset.default_model;
   els.llmApiKey.value = "";
   els.llmApiKey.placeholder =
-    isActive && active.has_api_key ? active.api_key_masked : "sk-...";
+    isActive && active.has_api_key
+      ? active.api_key_masked
+      : preset.needs_api_key
+        ? "sk-..."
+        : t("apiKeyOptional");
   renderLlmProviderFields();
 }
 
@@ -4174,7 +4180,7 @@ function renderImageProviderFields() {
   const preset = currentImageProviderMeta();
   if (!preset) return;
   els.imageBaseUrlRow.classList.toggle("hidden", !preset.base_url_editable);
-  els.imageApiKeyRow.classList.toggle("hidden", !preset.needs_api_key);
+  els.imageApiKeyRow.classList.toggle("hidden", !preset.api_key_editable);
   els.imageModelRow.classList.toggle("hidden", !preset.model_editable);
   els.imageOptionsRows.classList.toggle("hidden", preset.id === "disabled");
   els.imageProviderNote.textContent = providerNote(preset);
@@ -4191,7 +4197,11 @@ function fillImageFormForProvider(providerId) {
   els.imageModel.value = isActive ? active.model : preset.default_model;
   els.imageApiKey.value = "";
   els.imageApiKey.placeholder =
-    isActive && active.has_api_key ? active.api_key_masked : "sk-...";
+    isActive && active.has_api_key
+      ? active.api_key_masked
+      : preset.needs_api_key
+        ? "sk-..."
+        : t("apiKeyOptional");
   renderImageProviderFields();
 }
 

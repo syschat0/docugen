@@ -18,7 +18,8 @@ from app.core.config import settings
 _SETTING_KEY = "llm_provider"
 
 # Preset providers surfaced in the UI. ``base_url_editable`` / ``model_editable``
-# / ``needs_api_key`` drive which fields the frontend shows for each preset.
+# / ``api_key_editable`` drive which fields the frontend shows for each preset;
+# ``needs_api_key`` marks the key as required (vs. optional) on save.
 PROVIDERS: list[Dict[str, Any]] = [
     {
         "id": "local",
@@ -27,6 +28,7 @@ PROVIDERS: list[Dict[str, Any]] = [
         "base_url": "http://localhost:8088/v1",
         "default_model": "",
         "needs_api_key": False,
+        "api_key_editable": False,
         "base_url_editable": True,
         "model_editable": True,
         "note_en": "Any OpenAI-compatible server on localhost.",
@@ -39,6 +41,7 @@ PROVIDERS: list[Dict[str, Any]] = [
         "base_url": "http://127.0.0.1:10531/v1",
         "default_model": "gpt-5-codex",
         "needs_api_key": False,
+        "api_key_editable": False,
         "base_url_editable": False,
         "model_editable": True,
         "note_en": (
@@ -59,6 +62,7 @@ PROVIDERS: list[Dict[str, Any]] = [
         "base_url": "https://api.openai.com/v1",
         "default_model": "gpt-4o-mini",
         "needs_api_key": True,
+        "api_key_editable": True,
         "base_url_editable": False,
         "model_editable": True,
         "note_en": "The API key is stored in plain text in the local database.",
@@ -71,10 +75,17 @@ PROVIDERS: list[Dict[str, Any]] = [
         "base_url": "",
         "default_model": "",
         "needs_api_key": False,
+        "api_key_editable": True,
         "base_url_editable": True,
         "model_editable": True,
-        "note_en": "Point at any OpenAI-compatible /v1 endpoint.",
-        "note_ko": "임의의 OpenAI 호환 /v1 엔드포인트를 지정합니다.",
+        "note_en": (
+            "Point at any OpenAI-compatible /v1 endpoint. "
+            "Leave the API key empty for servers that don't need one."
+        ),
+        "note_ko": (
+            "임의의 OpenAI 호환 /v1 엔드포인트를 지정합니다. "
+            "키가 필요 없는 서버는 API 키를 비워 두세요."
+        ),
     },
 ]
 
