@@ -426,3 +426,22 @@ render as plain text instead of breaking the page.
 - Export service
 - LangGraph-based document generation loop
 - Multi-step LLM writing agents
+
+## License
+
+Copyright (c) 2026 syschat0.
+
+This project is licensed under the [GNU Affero General Public License
+v3.0](LICENSE) (AGPL-3.0). You may use, modify, and redistribute it freely,
+but if you run a modified version as a network service, you must make the
+complete source code of your version available to its users under the same
+license.
+
+Bundled third-party components keep their own licenses:
+
+- [KaTeX](app/static/vendor/katex/LICENSE) (MIT)
+- [Mermaid](app/static/vendor/mermaid.LICENSE) (MIT)
+
+Documents and images produced by the pipeline are not covered by this
+license; rights in generated output follow the terms of the LLM and image API
+providers you configure.
